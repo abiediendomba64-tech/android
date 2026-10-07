@@ -25,7 +25,6 @@ import androidx.compose.material.icons.filled.FactCheck
 import androidx.compose.material.icons.filled.Policy
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Shield
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -35,10 +34,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -62,7 +58,6 @@ import com.example.ui.theme.ExpenseRed
 import com.example.ui.theme.IncomeGreen
 import com.example.ui.theme.PrimaryBlue
 import com.example.ui.theme.PrimaryNavy
-import com.example.ui.theme.TransferAmber
 
 @Composable
 fun AuditLogScreen(
@@ -74,7 +69,10 @@ fun AuditLogScreen(
     val accounts by viewModel.accountsWithBalance.collectAsStateWithLifecycle()
     val transactions by viewModel.activeTransactions.collectAsStateWithLifecycle()
 
-    var lastAuditReportText by remember { mutableStateOf<String?>(null) }\n    var selectedAuditFilter by remember { mutableStateOf("Semua") }\n\n    val filteredLogs = remember(auditLogs, selectedAuditFilter) {
+    var lastAuditReportText by remember { mutableStateOf<String?>(null) }
+    var selectedAuditFilter by remember { mutableStateOf("Semua") }
+
+    val filteredLogs = remember(auditLogs, selectedAuditFilter) {
         when (selectedAuditFilter) {
             "Transaksi" -> auditLogs.filter { it.action.contains("MASUK") || it.action.contains("KELUAR") || it.action.contains("TRANSFER") }
             "Absensi" -> auditLogs.filter { it.action.contains("ATTENDANCE") }
@@ -313,4 +311,4 @@ fun AuditLogScreen(
         }
     }
 
-}\n
+}
