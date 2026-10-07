@@ -53,8 +53,8 @@ fun KalkulatorScreen(
     val kpis by viewModel.dashboardKpis.collectAsStateWithLifecycle()
 
     var nilaiAwalText by remember { mutableStateOf(kpis.totalBalance.toLong().toString()) }
-    var pemasukanText by remember { mutableStateOf("10000000") }
-    var pengeluaranText by remember { mutableStateOf("4500000") }
+    var pemasukanText by remember { mutableStateOf("") }
+    var pengeluaranText by remember { mutableStateOf("") }
 
     val nilaiAwal = nilaiAwalText.toDoubleOrNull() ?: 0.0
     val pemasukan = pemasukanText.toDoubleOrNull() ?: 0.0
@@ -85,13 +85,13 @@ fun KalkulatorScreen(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "KALKULATOR & SIMULATOR KAS",
+                            text = "KALKULATOR KAS",
                             fontSize = 17.sp,
                             fontWeight = FontWeight.ExtraBold,
                             color = Color.White
                         )
                         Text(
-                            text = "Simulasi margin, rasio beban, dan proyeksi saldo kas",
+                            text = "Hitung skenario kas berdasarkan angka yang Anda masukkan",
                             fontSize = 12.sp,
                             color = Color.White.copy(alpha = 0.9f)
                         )
@@ -120,7 +120,7 @@ fun KalkulatorScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = "Variabel Simulasi",
+                        text = "Input Perkiraan",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
@@ -136,7 +136,7 @@ fun KalkulatorScreen(
                     OutlinedTextField(
                         value = pemasukanText,
                         onValueChange = { if (it.all { ch -> ch.isDigit() }) pemasukanText = it },
-                        label = { Text("Simulasi Pemasukan Kas (Rp)") },
+                        label = { Text("Perkiraan Pemasukan Kas (Rp)") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -144,7 +144,7 @@ fun KalkulatorScreen(
                     OutlinedTextField(
                         value = pengeluaranText,
                         onValueChange = { if (it.all { ch -> ch.isDigit() }) pengeluaranText = it },
-                        label = { Text("Simulasi Pengeluaran Kas (Rp)") },
+                        label = { Text("Perkiraan Pengeluaran Kas (Rp)") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -166,7 +166,7 @@ fun KalkulatorScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Text(
-                        text = "Hasil Perhitungan Simulator",
+                        text = "Hasil Perhitungan",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
