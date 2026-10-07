@@ -249,7 +249,7 @@ class KasRepository(
     }
 
     suspend fun saveBudget(budget: BudgetEntity) {
-        require(budget.period.equals("All", ignoreCase = true) || budget.period.matches(Regex("""\\d{4}-\\d{2}"""))) { "Periode anggaran harus YYYY-MM atau All." }
+        require(budget.period.equals("All", ignoreCase = true) || budget.period.matches(Regex("""\d{4}-\\d{2}"""))) { "Periode anggaran harus YYYY-MM atau All." }
         require(budget.category.isNotBlank()) { "Kategori anggaran wajib diisi." }
         require(budget.budgetAmount.isFinite() && budget.budgetAmount >= 0.0) { "Nominal anggaran tidak valid." }
         budgetDao.insertBudget(budget)
@@ -262,11 +262,13 @@ class KasRepository(
     suspend fun saveReceivable(receivable: ReceivableEntity) {
         require(receivable.type in setOf("PIUTANG", "HUTANG")) { "Jenis tagihan tidak valid." }
         require(receivable.customerName.isNotBlank()) { "Nama pihak wajib diisi." }
+        require(receivable.date.matches(Regex("""\d{4}-\d{2}-\d{2}"""))) { "Tanggal pencatatan harus YYYY-MM-DD." }
         require(receivable.totalAmount.isFinite() && receivable.totalAmount > 0.0) { "Nominal tagihan harus lebih besar dari Rp 0." }
         require(receivable.paidAmount.isFinite() && receivable.paidAmount >= 0.0 && receivable.paidAmount <= receivable.totalAmount) { "Nominal pembayaran tagihan tidak valid." }
-        require(receivable.dueDate.matches(Regex("""\\d{4}-\\d{2}-\\d{2}"""))) { "Tanggal jatuh tempo harus YYYY-MM-DD." }
+        require(receivable.dueDate.matches(Regex("""\d{4}-\\d{2}-\\d{2}"""))) { "Tanggal jatuh tempo harus YYYY-MM-DD." }
         require(accountDao.getAccountByName(receivable.targetAccount)?.isActive == true) { "Akun terkait tidak terdaftar atau nonaktif." }
-        receivableDao.insertReceivable(receivable)
+        val normalizedStatus = if (receivable.paidAmount >= receivable.totalAmount) "Lunas" else receivable.status
+        receivableDao.insertReceivable(receivable.copy(status = normalizedStatus))
     }
 
     suspend fun payReceivable(id: String, paymentAmount: Double, targetAccount: String, pic: String = "Bendahara") {
@@ -399,7 +401,7 @@ class KasRepository(
     suspend fun saveAttendance(attendance: AttendanceEntity) {
         require(attendance.employeeId.isNotBlank()) { "ID karyawan wajib diisi." }
         require(employeeDao.getEmployeeById(attendance.employeeId) != null) { "Karyawan tidak ditemukan." }
-        require(attendance.date.matches(Regex("""\\d{4}-\\d{2}-\\d{2}"""))) { "Tanggal absensi harus YYYY-MM-DD." }
+        require(attendance.date.matches(Regex("""\d{4}-\\d{2}-\\d{2}"""))) { "Tanggal absensi harus YYYY-MM-DD." }
         require(attendance.status in setOf("Hadir", "Izin", "Sakit", "Alpa", "Cuti")) { "Status absensi tidak valid." }
         require(attendance.overtimeHours.isFinite() && attendance.overtimeHours >= 0.0) { "Jam lembur tidak valid." }
         require(attendance.dailyAllowance.isFinite() && attendance.dailyAllowance >= 0.0) { "Uang harian tidak valid." }
@@ -425,7 +427,7 @@ class KasRepository(
     suspend fun saveBankReconciliation(recon: BankReconEntity) {
         require(accountDao.getAccountByName(recon.accountName)?.isActive == true) { "Akun rekonsiliasi tidak terdaftar atau nonaktif." }
         require(recon.statementBalance.isFinite() && recon.statementBalance >= 0.0) { "Saldo rekening koran tidak valid." }
-        require(recon.period.matches(Regex("""\\d{4}-\\d{2}"""))) { "Periode rekonsiliasi harus YYYY-MM." }
+        require(recon.period.matches(Regex("""\d{4}-\\d{2}"""))) { "Periode rekonsiliasi harus YYYY-MM." }
         val computedDifference = recon.statementBalance - recon.bookBalance
         val normalized = recon.copy(
             difference = computedDifference,
