@@ -18,6 +18,9 @@ interface AuditDao {
     @Query("DELETE FROM audit_logs")
     suspend fun clearAuditLogs()
 
+    @Query("SELECT * FROM audit_logs ORDER BY timestamp ASC")
+    suspend fun getAllAuditLogs(): List<AuditLogEntity>
+
     @Query("SELECT COUNT(*) FROM audit_logs")
     suspend fun countAuditLogs(): Int
 }

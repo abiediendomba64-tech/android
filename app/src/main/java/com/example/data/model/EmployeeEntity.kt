@@ -10,7 +10,7 @@ data class EmployeeEntity(
     val position: String, // Jabatan
     val department: String, // Divisi / Bagian
     val phone: String, // No WA
-    val dailyRate: Double = 150000.0, // Uang harian / tunjangan
-    val monthlySalary: Double = 3500000.0, // Gaji pokok bulanan
+    val dailyRate: Double = 0.0, // Uang harian / tunjangan
+    val monthlySalary: Double = 0.0, // Gaji pokok bulanan
     val isActive: Boolean = true
 )

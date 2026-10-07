@@ -838,7 +838,7 @@ fun AbsensiScreen(
         val payslipText = """
             =========================================
                     SLIP GAJI KARYAWAN RESMI         
-                   PT Berkah Mitra Sejahtera         
+                   Sistem Kas         
             Periode: $periodLabel                    
             =========================================
             ID Karyawan : ${emp.id}
@@ -861,7 +861,7 @@ fun AbsensiScreen(
             -----------------------------------------
             *GAJI BERSIH (TAKE HOME PAY)*: ${formatRupiah(takeHomePay)}
             =========================================
-            Status: LUNAS & DIVERIFIKASI SISTEM KAS
+            Status: PERHITUNGAN ABSENSI — BUKAN BUKTI PEMBAYARAN
             Pengesahan: Bagian Keuangan / Bendahara
             =========================================
         """.trimIndent()
@@ -881,7 +881,7 @@ fun AbsensiScreen(
                             .background(Color(0xFFDCFCE7))
                             .padding(horizontal = 6.dp, vertical = 2.dp)
                     ) {
-                        Text("RESMI", color = IncomeGreen, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                        Text("PERHITUNGAN", color = PrimaryBlue, fontWeight = FontWeight.Bold, fontSize = 10.sp)
                     }
                 }
             },

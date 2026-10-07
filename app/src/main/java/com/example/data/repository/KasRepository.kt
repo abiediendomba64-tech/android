@@ -19,6 +19,7 @@ import com.example.data.model.EmployeeEntity
 import com.example.data.model.ReceivableEntity
 import com.example.data.model.TransactionEntity
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
@@ -77,6 +78,12 @@ data class AttendanceSummary(
     val totalAllowance: Double
 )
 
+data class IntegrityAuditResult(
+    val passed: Boolean,
+    val issues: List<String>,
+    val checkedAt: String
+)
+
 class KasRepository(
     private val transactionDao: TransactionDao,
     private val accountDao: AccountDao,
@@ -100,9 +107,10 @@ class KasRepository(
     val bankReconciliations: Flow<List<BankReconEntity>> = bankReconDao.getAllReconciliations()
 
     suspend fun saveTransaction(transaction: TransactionEntity) {
+        validateTransaction(transaction)
         transactionDao.insertTransaction(transaction)
 
-        // Real Audit Logging
+        // Audit trail records the write; it does not claim external formula verification.
         val nowStamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
         auditDao.insertAuditLog(
             AuditLogEntity(
@@ -111,12 +119,26 @@ class KasRepository(
                 recordId = transaction.id,
                 details = "${transaction.name} (${transaction.account}) sebesar Rp ${transaction.amount.toLong()} - Kategori: ${transaction.category}",
                 user = transaction.inputBy,
-                verifiedFormulaStatus = "SUMIFS_AUDIT_OK",
+                verifiedFormulaStatus = "RECORDED",
                 balanceAfter = 0.0
             )
         )
     }
 
+    private suspend fun validateTransaction(transaction: TransactionEntity) {
+        require(transaction.amount.isFinite() && transaction.amount > 0.0) { "Nominal transaksi harus lebih besar dari Rp 0." }
+        require(transaction.type in setOf("MASUK", "KELUAR", "TRANSFER")) { "Tipe transaksi tidak valid." }
+        require(transaction.status in setOf("Selesai", "Draft", "Pending", "Batal", "Dihapus")) { "Status transaksi tidak valid." }
+        require(accountDao.getAccountByName(transaction.account)?.isActive == true) { "Akun ${transaction.account} tidak terdaftar atau nonaktif." }
+        if (transaction.type == "TRANSFER") {
+            val destination = transaction.toAccount?.takeIf { it.isNotBlank() }
+            require(destination != null) { "Akun tujuan transfer wajib diisi." }
+            require(!destination.equals(transaction.account, ignoreCase = true)) { "Akun asal dan tujuan transfer tidak boleh sama." }
+            require(accountDao.getAccountByName(destination) != null) { "Akun tujuan $destination tidak terdaftar." }
+        } else {
+            require(transaction.toAccount == null) { "Akun tujuan hanya boleh diisi untuk transfer." }
+        }
+    }
     suspend fun archiveTransaction(id: String, archivedBy: String = "Admin") {
         transactionDao.archiveTransaction(id, System.currentTimeMillis(), archivedBy)
         val nowStamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
@@ -127,7 +149,7 @@ class KasRepository(
                 recordId = id,
                 details = "Transaksi dipindahkan ke Transaksi_Dihapus (Arsip)",
                 user = archivedBy,
-                verifiedFormulaStatus = "AUDITED"
+                verifiedFormulaStatus = "RECORDED"
             )
         )
     }
@@ -142,7 +164,7 @@ class KasRepository(
                 recordId = id,
                 details = "Transaksi dipulihkan kembali ke buku ledger aktif",
                 user = "Admin",
-                verifiedFormulaStatus = "AUDITED"
+                verifiedFormulaStatus = "RECORDED"
             )
         )
     }
@@ -157,7 +179,7 @@ class KasRepository(
                 recordId = id,
                 details = "Transaksi dihapus permanen dari basis data",
                 user = "Admin",
-                verifiedFormulaStatus = "AUDITED"
+                verifiedFormulaStatus = "RECORDED"
             )
         )
     }
@@ -172,35 +194,18 @@ class KasRepository(
                 recordId = "TRASH-ALL",
                 details = "Seluruh arsip transaksi dibersihkan permanen",
                 user = "Admin",
-                verifiedFormulaStatus = "AUDITED"
+                verifiedFormulaStatus = "RECORDED"
             )
         )
     }
 
     suspend fun saveAccount(account: AccountEntity) {
-        accountDao.insertAccount(account)
-    }
-
-    suspend fun bersihkanSemuaDataSampelKeDataReal(saldoAwalKas: Map<String, Double>) {
-        transactionDao.deleteAllTransactions()
-        // Update account balances
-        saldoAwalKas.forEach { (accName, initialBal) ->
-            val existing = accountDao.getAccountByName(accName)
-            if (existing != null) {
-                accountDao.updateAccount(existing.copy(initialBalance = initialBal))
-            }
-        }
-        val nowStamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-        auditDao.insertAuditLog(
-            AuditLogEntity(
-                dateFormatted = nowStamp,
-                action = "DATA_REAL_ACTIVATED",
-                recordId = "REAL-MODE",
-                details = "Sistem beralih ke Mode Data Keuangan Riil. Seluruh sampel transaksi dibersihkan total (0 Transaksi Aktif). Saldo awal akun diperbarui sesuai kas nyata perusahaan.",
-                user = "Auditor Keuangan",
-                verifiedFormulaStatus = "AUDIT_100%_REAL_MODE"
-            )
-        )
+        require(account.name.isNotBlank()) { "Nama akun wajib diisi." }
+        require(account.type in setOf("Kas", "Bank", "E-Wallet", "Lainnya")) { "Jenis akun tidak valid." }
+        require(account.initialBalance.isFinite() && account.initialBalance >= 0.0) { "Saldo awal akun tidak valid." }
+        val existing = accountDao.getAccountByName(account.name.trim())
+        require(existing == null || existing.id == account.id) { "Nama akun sudah digunakan." }
+        accountDao.insertAccount(account.copy(name = account.name.trim()))
     }
 
     suspend fun bulkMarkAllEmployeesHadir(date: String) {
@@ -234,7 +239,7 @@ class KasRepository(
                 recordId = "ATT-BULK-$date",
                 details = "Pencatatan absensi cepat untuk seluruh karyawan hadir pada tanggal $date",
                 user = "Admin Absensi",
-                verifiedFormulaStatus = "AUDITED"
+                verifiedFormulaStatus = "RECORDED"
             )
         )
     }
@@ -244,6 +249,9 @@ class KasRepository(
     }
 
     suspend fun saveBudget(budget: BudgetEntity) {
+        require(budget.period.equals("All", ignoreCase = true) || budget.period.matches(Regex("""\d{4}-\\d{2}"""))) { "Periode anggaran harus YYYY-MM atau All." }
+        require(budget.category.isNotBlank()) { "Kategori anggaran wajib diisi." }
+        require(budget.budgetAmount.isFinite() && budget.budgetAmount >= 0.0) { "Nominal anggaran tidak valid." }
         budgetDao.insertBudget(budget)
     }
 
@@ -252,11 +260,24 @@ class KasRepository(
     }
 
     suspend fun saveReceivable(receivable: ReceivableEntity) {
-        receivableDao.insertReceivable(receivable)
+        require(receivable.type in setOf("PIUTANG", "HUTANG")) { "Jenis tagihan tidak valid." }
+        require(receivable.customerName.isNotBlank()) { "Nama pihak wajib diisi." }
+        require(receivable.date.matches(Regex("""\d{4}-\d{2}-\d{2}"""))) { "Tanggal pencatatan harus YYYY-MM-DD." }
+        require(receivable.totalAmount.isFinite() && receivable.totalAmount > 0.0) { "Nominal tagihan harus lebih besar dari Rp 0." }
+        require(receivable.paidAmount.isFinite() && receivable.paidAmount >= 0.0 && receivable.paidAmount <= receivable.totalAmount) { "Nominal pembayaran tagihan tidak valid." }
+        require(receivable.dueDate.matches(Regex("""\d{4}-\\d{2}-\\d{2}"""))) { "Tanggal jatuh tempo harus YYYY-MM-DD." }
+        require(accountDao.getAccountByName(receivable.targetAccount)?.isActive == true) { "Akun terkait tidak terdaftar atau nonaktif." }
+        val normalizedStatus = if (receivable.paidAmount >= receivable.totalAmount) "Lunas" else receivable.status
+        receivableDao.insertReceivable(receivable.copy(status = normalizedStatus))
     }
 
     suspend fun payReceivable(id: String, paymentAmount: Double, targetAccount: String, pic: String = "Bendahara") {
-        val current = receivableDao.getReceivableById(id) ?: return
+        val current = receivableDao.getReceivableById(id)
+            ?: throw IllegalArgumentException("Piutang $id tidak ditemukan.")
+        require(paymentAmount.isFinite() && paymentAmount > 0.0) { "Nominal pembayaran harus lebih besar dari Rp 0." }
+        require(current.type == "PIUTANG") { "Record ${current.id} bukan piutang." }
+        require(paymentAmount <= current.remainingAmount) { "Pembayaran melebihi sisa piutang ${current.id}." }
+        require(accountDao.getAccountByName(targetAccount)?.isActive == true) { "Akun penerimaan $targetAccount tidak terdaftar atau nonaktif." }
         val updatedPaid = current.paidAmount + paymentAmount
         val newStatus = if (updatedPaid >= current.totalAmount) "Lunas" else current.status
         receivableDao.updateReceivable(
@@ -288,7 +309,12 @@ class KasRepository(
     }
 
     suspend fun payHutang(id: String, paymentAmount: Double, sourceAccount: String, pic: String = "Bendahara") {
-        val current = receivableDao.getReceivableById(id) ?: return
+        val current = receivableDao.getReceivableById(id)
+            ?: throw IllegalArgumentException("Hutang $id tidak ditemukan.")
+        require(paymentAmount.isFinite() && paymentAmount > 0.0) { "Nominal pembayaran harus lebih besar dari Rp 0." }
+        require(current.type == "HUTANG") { "Record ${current.id} bukan hutang." }
+        require(paymentAmount <= current.remainingAmount) { "Pembayaran melebihi sisa hutang ${current.id}." }
+        require(accountDao.getAccountByName(sourceAccount)?.isActive == true) { "Akun pembayaran $sourceAccount tidak terdaftar atau nonaktif." }
         val updatedPaid = current.paidAmount + paymentAmount
         val newStatus = if (updatedPaid >= current.totalAmount) "Lunas" else current.status
         receivableDao.updateReceivable(
@@ -329,7 +355,7 @@ class KasRepository(
                 recordId = newTx.id,
                 details = "Perubahan transaksi ${newTx.id}: [Lama: ${oldTx.name}, Rp ${oldTx.amount.toLong()}, ${oldTx.account}] -> [Baru: ${newTx.name}, Rp ${newTx.amount.toLong()}, ${newTx.account}]",
                 user = "Admin",
-                verifiedFormulaStatus = "AUDITED",
+                verifiedFormulaStatus = "RECORDED",
                 balanceAfter = 0.0
             )
         )
@@ -349,6 +375,10 @@ class KasRepository(
 
     // Employee & Attendance Operations
     suspend fun saveEmployee(employee: EmployeeEntity) {
+        require(employee.name.isNotBlank()) { "Nama karyawan wajib diisi." }
+        require(employee.dailyRate.isFinite() && employee.dailyRate >= 0.0) { "Uang harian tidak valid." }
+        require(employee.monthlySalary.isFinite() && employee.monthlySalary >= 0.0) { "Gaji bulanan tidak valid." }
+        require(employeeDao.getEmployeeById(employee.id) == null) { "ID karyawan sudah digunakan." }
         employeeDao.insertEmployee(employee)
     }
 
@@ -369,6 +399,12 @@ class KasRepository(
         attendanceDao.getAttendancesByPeriod(start, end)
 
     suspend fun saveAttendance(attendance: AttendanceEntity) {
+        require(attendance.employeeId.isNotBlank()) { "ID karyawan wajib diisi." }
+        require(employeeDao.getEmployeeById(attendance.employeeId) != null) { "Karyawan tidak ditemukan." }
+        require(attendance.date.matches(Regex("""\d{4}-\\d{2}-\\d{2}"""))) { "Tanggal absensi harus YYYY-MM-DD." }
+        require(attendance.status in setOf("Hadir", "Izin", "Sakit", "Alpa", "Cuti")) { "Status absensi tidak valid." }
+        require(attendance.overtimeHours.isFinite() && attendance.overtimeHours >= 0.0) { "Jam lembur tidak valid." }
+        require(attendance.dailyAllowance.isFinite() && attendance.dailyAllowance >= 0.0) { "Uang harian tidak valid." }
         attendanceDao.insertAttendance(attendance)
         val nowStamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
         auditDao.insertAuditLog(
@@ -378,7 +414,7 @@ class KasRepository(
                 recordId = attendance.id,
                 details = "Absensi ${attendance.employeeName} (${attendance.status}) pada ${attendance.date}",
                 user = "Admin Absensi",
-                verifiedFormulaStatus = "AUDITED"
+                verifiedFormulaStatus = "RECORDED"
             )
         )
     }
@@ -389,16 +425,24 @@ class KasRepository(
 
     // Bank Reconciliation Operations
     suspend fun saveBankReconciliation(recon: BankReconEntity) {
-        bankReconDao.insertReconciliation(recon)
+        require(accountDao.getAccountByName(recon.accountName)?.isActive == true) { "Akun rekonsiliasi tidak terdaftar atau nonaktif." }
+        require(recon.statementBalance.isFinite() && recon.statementBalance >= 0.0) { "Saldo rekening koran tidak valid." }
+        require(recon.period.matches(Regex("""\d{4}-\\d{2}"""))) { "Periode rekonsiliasi harus YYYY-MM." }
+        val computedDifference = recon.statementBalance - recon.bookBalance
+        val normalized = recon.copy(
+            difference = computedDifference,
+            status = if (kotlin.math.abs(computedDifference) < 1.0) "Cocok" else "Selisih"
+        )
+        bankReconDao.insertReconciliation(normalized)
         val nowStamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
         auditDao.insertAuditLog(
             AuditLogEntity(
                 dateFormatted = nowStamp,
                 action = "BANK_RECONCILE",
                 recordId = recon.id,
-                details = "Rekonsiliasi ${recon.accountName} periode ${recon.period}: Buku Rp ${recon.bookBalance.toLong()} vs Bank Rp ${recon.statementBalance.toLong()} (Selisih: Rp ${recon.difference.toLong()} - ${recon.status})",
+                details = "Rekonsiliasi ${normalized.accountName} periode ${normalized.period}: Buku Rp ${normalized.bookBalance.toLong()} vs Bank Rp ${normalized.statementBalance.toLong()} (Selisih: Rp ${normalized.difference.toLong()} - ${normalized.status})",
                 user = recon.reconciledBy,
-                verifiedFormulaStatus = "RECON_AUDIT_OK"
+                verifiedFormulaStatus = "RECORDED"
             )
         )
     }
@@ -507,33 +551,38 @@ class KasRepository(
         startDate: String,
         endDate: String
     ): CashFlowStatement {
-        val settledTx = transactions.filter { it.status == "Selesai" && it.date >= startDate && it.date <= endDate }
+        val settledTx = transactions.filter { it.status == "Selesai" }
+        val periodTx = settledTx.filter { it.date >= startDate && it.date <= endDate }
 
-        // Operating Flow
-        val opInflow = settledTx.filter {
-            it.type == "MASUK" && (it.category in listOf("Penjualan", "Piutang Masuk", "Pendapatan Lain", "Operasional"))
+        val opInflow = periodTx.filter {
+            it.type == "MASUK" && it.category !in listOf("Modal", "Investasi")
         }.sumOf { it.amount }
 
-        val opOutflow = settledTx.filter {
-            it.type == "KELUAR" && (it.allocation in listOf("Operasional", "Gaji", "Marketing") || it.category in listOf("Belanja Barang", "Gaji", "Listrik/Internet", "Sewa", "Transportasi"))
-        }.sumOf { it.amount }
-
-        // Investing Flow (Proyek, Pengadaan inventaris besar)
-        val invOutflow = settledTx.filter {
+        val investingIds = periodTx.filter {
             it.type == "KELUAR" && (it.allocation == "Proyek" || it.project.isNotBlank())
-        }.sumOf { it.amount }
+        }.map { it.id }.toSet()
 
-        // Financing Flow (Modal, Transfer Masuk/Keluar)
-        val finInflow = settledTx.filter {
+        val invOutflow = periodTx.filter { it.id in investingIds }.sumOf { it.amount }
+        val opOutflow = periodTx.filter { it.type == "KELUAR" && it.id !in investingIds }.sumOf { it.amount }
+
+        val finInflow = periodTx.filter {
             it.type == "MASUK" && it.category in listOf("Modal", "Investasi")
         }.sumOf { it.amount }
 
         val netOp = opInflow - opOutflow
         val netInv = -invOutflow
         val netFin = finInflow
-
         val netTotal = netOp + netInv + netFin
-        val openingBal = accounts.sumOf { it.initialBalance }
+
+        // Opening balance is the consolidated ledger balance immediately before the report period.
+        val openingNet = settledTx.filter { it.date < startDate }.sumOf {
+            when (it.type) {
+                "MASUK" -> it.amount
+                "KELUAR" -> -it.amount
+                else -> 0.0 // Internal transfers are neutral to consolidated cash.
+            }
+        }
+        val openingBal = accounts.sumOf { it.initialBalance } + openingNet
         val closingBal = openingBal + netTotal
 
         return CashFlowStatement(
@@ -550,7 +599,6 @@ class KasRepository(
             closingBalance = closingBal
         )
     }
-
     fun calculateAttendanceSummary(attendances: List<AttendanceEntity>): AttendanceSummary {
         val empSet = attendances.map { it.employeeId }.toSet()
         val hadir = attendances.count { it.status.equals("Hadir", ignoreCase = true) }
@@ -573,6 +621,61 @@ class KasRepository(
         )
     }
 
+    fun runIntegrityAudit(
+        accounts: List<AccountEntity>,
+        transactions: List<TransactionEntity>,
+        budgets: List<BudgetEntity>,
+        receivables: List<ReceivableEntity>,
+        employees: List<EmployeeEntity>,
+        attendances: List<AttendanceEntity>
+    ): IntegrityAuditResult {
+        val issues = mutableListOf<String>()
+        val checkedAt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+        val accountNames = accounts.map { it.name.trim().lowercase(Locale.getDefault()) }.toSet()
+        val employeeIds = employees.map { it.id }.toSet()
+        val validTypes = setOf("MASUK", "KELUAR", "TRANSFER")
+        val validStatuses = setOf("Selesai", "Draft", "Pending", "Batal", "Dihapus")
+
+        transactions.forEach { tx ->
+            if (!tx.amount.isFinite() || tx.amount <= 0.0) issues += "Transaksi ${tx.id}: nominal tidak valid."
+            if (tx.type !in validTypes) issues += "Transaksi ${tx.id}: tipe ${tx.type} tidak valid."
+            if (tx.status !in validStatuses) issues += "Transaksi ${tx.id}: status ${tx.status} tidak valid."
+            if (tx.account.trim().lowercase(Locale.getDefault()) !in accountNames) issues += "Transaksi ${tx.id}: akun ${tx.account} tidak terdaftar."
+            if (tx.type == "TRANSFER") {
+                val destination = tx.toAccount?.trim().orEmpty()
+                if (destination.isBlank()) issues += "Transfer ${tx.id}: akun tujuan kosong."
+                else if (destination.lowercase(Locale.getDefault()) !in accountNames) issues += "Transfer ${tx.id}: akun tujuan $destination tidak terdaftar."
+                else if (destination.equals(tx.account, ignoreCase = true)) issues += "Transfer ${tx.id}: akun asal sama dengan tujuan."
+            }
+        }
+
+        budgets.forEach { budget ->
+            if (!budget.budgetAmount.isFinite() || budget.budgetAmount < 0.0) issues += "Anggaran ${budget.id}: nominal pagu tidak valid."
+        }
+
+        receivables.forEach { item ->
+            if (!item.totalAmount.isFinite() || item.totalAmount <= 0.0) issues += "${item.type} ${item.id}: total nominal tidak valid."
+            if (!item.paidAmount.isFinite() || item.paidAmount < 0.0 || item.paidAmount > item.totalAmount) issues += "${item.type} ${item.id}: paidAmount tidak valid."
+            if (item.targetAccount.trim().lowercase(Locale.getDefault()) !in accountNames) issues += "${item.type} ${item.id}: akun terkait tidak terdaftar."
+        }
+
+        attendances.forEach { att ->
+            if (att.employeeId !in employeeIds) issues += "Absensi ${att.id}: karyawan ${att.employeeId} tidak terdaftar."
+            if (att.overtimeHours < 0.0 || att.dailyAllowance < 0.0) issues += "Absensi ${att.id}: nilai lembur/tunjangan tidak valid."
+        }
+
+        val balances = calculateAccountBalances(accounts, transactions)
+        val calculatedTotal = balances.sumOf { it.currentBalance }
+        val expectedTotal = accounts.sumOf { it.initialBalance } +
+            transactions.filter { it.status == "Selesai" && it.type == "MASUK" }.sumOf { it.amount } -
+            transactions.filter { it.status == "Selesai" && it.type == "KELUAR" }.sumOf { it.amount }
+
+        if (kotlin.math.abs(calculatedTotal - expectedTotal) > 0.01) {
+            issues += "Invariant saldo gagal: total saldo akun tidak sama dengan saldo awal + arus kas."
+        }
+
+        return IntegrityAuditResult(passed = issues.isEmpty(), issues = issues.distinct(), checkedAt = checkedAt)
+    }
     // Export WhatsApp Text Formatters
     fun formatWhatsAppText(message: String, phone: String = ""): String {
         val encoded = URLEncoder.encode(message, "UTF-8")
@@ -592,12 +695,13 @@ class KasRepository(
         notes: List<CashNoteEntity>
     ): String {
         val root = JSONObject()
-        root.put("app", "Sistem Kas Terintegrasi")
-        root.put("version", "2.0")
+        root.put("app", "Sistem Kas")
+        root.put("version", "3.0")
         root.put("timestamp", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()))
 
         val txArray = JSONArray()
-        transactions.forEach { tx ->
+        val allTransactions = (transactions + transactionDao.getArchivedTransactions().first()).distinctBy { it.id }
+        allTransactions.forEach { tx ->
             val obj = JSONObject().apply {
                 put("id", tx.id)
                 put("type", tx.type)
@@ -618,6 +722,9 @@ class KasRepository(
                 put("status", tx.status)
                 put("inputTime", tx.inputTime)
                 put("inputBy", tx.inputBy)
+                put("isArchived", tx.isArchived)
+                put("archivedAt", tx.archivedAt ?: JSONObject.NULL)
+                put("archivedBy", tx.archivedBy ?: JSONObject.NULL)
             }
             txArray.put(obj)
         }
@@ -635,6 +742,116 @@ class KasRepository(
             accArray.put(obj)
         }
         root.put("accounts", accArray)
+
+        val budgetArray = JSONArray()
+        budgets.forEach { budget ->
+            budgetArray.put(JSONObject().apply {
+                put("id", budget.id)
+                put("period", budget.period)
+                put("category", budget.category)
+                put("budgetAmount", budget.budgetAmount)
+                put("notes", budget.notes)
+            })
+        }
+        root.put("budgets", budgetArray)
+
+        val receivableArray = JSONArray()
+        receivables.forEach { item ->
+            receivableArray.put(JSONObject().apply {
+                put("id", item.id)
+                put("type", item.type)
+                put("date", item.date)
+                put("customerName", item.customerName)
+                put("description", item.description)
+                put("totalAmount", item.totalAmount)
+                put("dueDate", item.dueDate)
+                put("paidAmount", item.paidAmount)
+                put("targetAccount", item.targetAccount)
+                put("notes", item.notes)
+                put("status", item.status)
+            })
+        }
+        root.put("receivables", receivableArray)
+
+        val noteArray = JSONArray()
+        notes.forEach { note ->
+            noteArray.put(JSONObject().apply {
+                put("id", note.id)
+                put("date", note.date)
+                put("title", note.title)
+                put("content", note.content)
+                put("pic", note.pic)
+                put("priority", note.priority)
+                put("status", note.status)
+            })
+        }
+        root.put("notes", noteArray)
+
+        val employeeArray = JSONArray()
+        employeeDao.getAllEmployeesList().forEach { employee ->
+            employeeArray.put(JSONObject().apply {
+                put("id", employee.id)
+                put("name", employee.name)
+                put("position", employee.position)
+                put("department", employee.department)
+                put("phone", employee.phone)
+                put("dailyRate", employee.dailyRate)
+                put("monthlySalary", employee.monthlySalary)
+                put("isActive", employee.isActive)
+            })
+        }
+        root.put("employees", employeeArray)
+
+        val attendanceArray = JSONArray()
+        attendanceDao.getAllAttendances().first().forEach { attendance ->
+            attendanceArray.put(JSONObject().apply {
+                put("id", attendance.id)
+                put("employeeId", attendance.employeeId)
+                put("employeeName", attendance.employeeName)
+                put("department", attendance.department)
+                put("date", attendance.date)
+                put("timeIn", attendance.timeIn)
+                put("timeOut", attendance.timeOut)
+                put("status", attendance.status)
+                put("overtimeHours", attendance.overtimeHours)
+                put("dailyAllowance", attendance.dailyAllowance)
+                put("notes", attendance.notes)
+            })
+        }
+        root.put("attendances", attendanceArray)
+
+        val auditArray = JSONArray()
+        auditDao.getAllAuditLogs().forEach { audit ->
+            auditArray.put(JSONObject().apply {
+                put("id", audit.id)
+                put("timestamp", audit.timestamp)
+                put("dateFormatted", audit.dateFormatted)
+                put("action", audit.action)
+                put("recordId", audit.recordId)
+                put("details", audit.details)
+                put("user", audit.user)
+                put("verifiedFormulaStatus", audit.verifiedFormulaStatus)
+                put("balanceAfter", audit.balanceAfter)
+            })
+        }
+        root.put("auditLogs", auditArray)
+
+        val reconArray = JSONArray()
+        bankReconDao.getAllReconciliations().first().forEach { recon ->
+            reconArray.put(JSONObject().apply {
+                put("id", recon.id)
+                put("accountName", recon.accountName)
+                put("period", recon.period)
+                put("bookBalance", recon.bookBalance)
+                put("statementBalance", recon.statementBalance)
+                put("difference", recon.difference)
+                put("status", recon.status)
+                put("reconciledBy", recon.reconciledBy)
+                put("reconciledAt", recon.reconciledAt)
+                put("notes", recon.notes)
+            })
+        }
+        root.put("bankReconciliations", reconArray)
 
         return root.toString(2)
     }
@@ -662,6 +879,133 @@ class KasRepository(
                 accountDao.insertAccounts(accList)
             }
 
+            if (root.has("budgets")) {
+                val array = root.getJSONArray("budgets")
+                val list = mutableListOf<BudgetEntity>()
+                for (i in 0 until array.length()) {
+                    val o = array.getJSONObject(i)
+                    list.add(BudgetEntity(o.optLong("id", 0L), o.getString("period"), o.getString("category"), o.getDouble("budgetAmount"), o.optString("notes", "")))
+                }
+                budgetDao.insertBudgets(list)
+            }
+
+            if (root.has("receivables")) {
+                val array = root.getJSONArray("receivables")
+                val list = mutableListOf<ReceivableEntity>()
+                for (i in 0 until array.length()) {
+                    val o = array.getJSONObject(i)
+                    list.add(ReceivableEntity(
+                        id = o.getString("id"),
+                        type = o.optString("type", "PIUTANG"),
+                        date = o.getString("date"),
+                        customerName = o.getString("customerName"),
+                        description = o.optString("description", ""),
+                        totalAmount = o.getDouble("totalAmount"),
+                        dueDate = o.getString("dueDate"),
+                        paidAmount = o.optDouble("paidAmount", 0.0),
+                        targetAccount = o.optString("targetAccount", ""),
+                        notes = o.optString("notes", ""),
+                        status = o.optString("status", "Belum Jatuh Tempo")
+                    ))
+                }
+                receivableDao.insertReceivables(list)
+            }
+
+            if (root.has("notes")) {
+                val array = root.getJSONArray("notes")
+                val list = mutableListOf<CashNoteEntity>()
+                for (i in 0 until array.length()) {
+                    val o = array.getJSONObject(i)
+                    list.add(CashNoteEntity(
+                        id = o.optLong("id", 0L),
+                        date = o.getString("date"),
+                        title = o.getString("title"),
+                        content = o.optString("content", ""),
+                        pic = o.optString("pic", "Admin"),
+                        priority = o.optString("priority", "Sedang"),
+                        status = o.optString("status", "Open")
+                    ))
+                }
+                noteDao.insertNotes(list)
+            }
+            if (root.has("employees")) {
+                val array = root.getJSONArray("employees")
+                val list = mutableListOf<EmployeeEntity>()
+                for (i in 0 until array.length()) {
+                    val o = array.getJSONObject(i)
+                    list.add(EmployeeEntity(
+                        id = o.getString("id"),
+                        name = o.getString("name"),
+                        position = o.optString("position", ""),
+                        department = o.optString("department", ""),
+                        phone = o.optString("phone", ""),
+                        dailyRate = o.optDouble("dailyRate", 0.0),
+                        monthlySalary = o.optDouble("monthlySalary", 0.0),
+                        isActive = o.optBoolean("isActive", true)
+                    ))
+                }
+                employeeDao.insertEmployees(list)
+            }
+
+            if (root.has("attendances")) {
+                val array = root.getJSONArray("attendances")
+                val list = mutableListOf<AttendanceEntity>()
+                for (i in 0 until array.length()) {
+                    val o = array.getJSONObject(i)
+                    list.add(AttendanceEntity(
+                        id = o.getString("id"),
+                        employeeId = o.getString("employeeId"),
+                        employeeName = o.getString("employeeName"),
+                        department = o.optString("department", ""),
+                        date = o.getString("date"),
+                        timeIn = o.optString("timeIn", ""),
+                        timeOut = o.optString("timeOut", ""),
+                        status = o.optString("status", ""),
+                        overtimeHours = o.optDouble("overtimeHours", 0.0),
+                        dailyAllowance = o.optDouble("dailyAllowance", 0.0),
+                        notes = o.optString("notes", "")
+                    ))
+                }
+                attendanceDao.insertAttendances(list)
+            }
+
+            if (root.has("bankReconciliations")) {
+                val array = root.getJSONArray("bankReconciliations")
+                for (i in 0 until array.length()) {
+                    val o = array.getJSONObject(i)
+                    bankReconDao.insertReconciliation(BankReconEntity(
+                        id = o.getString("id"),
+                        accountName = o.getString("accountName"),
+                        period = o.getString("period"),
+                        bookBalance = o.optDouble("bookBalance", 0.0),
+                        statementBalance = o.optDouble("statementBalance", 0.0),
+                        difference = o.optDouble("difference", 0.0),
+                        status = o.optString("status", "Belum Diverifikasi"),
+                        reconciledBy = o.optString("reconciledBy", "Bendahara"),
+                        reconciledAt = o.optLong("reconciledAt", System.currentTimeMillis()),
+                        notes = o.optString("notes", "")
+                    ))
+                }
+            }
+
+            if (root.has("auditLogs")) {
+                val array = root.getJSONArray("auditLogs")
+                for (i in 0 until array.length()) {
+                    val o = array.getJSONObject(i)
+                    auditDao.insertAuditLog(AuditLogEntity(
+                        id = o.optLong("id", 0L),
+                        timestamp = o.optLong("timestamp", System.currentTimeMillis()),
+                        dateFormatted = o.getString("dateFormatted"),
+                        action = o.getString("action"),
+                        recordId = o.getString("recordId"),
+                        details = o.optString("details", ""),
+                        user = o.optString("user", "Admin"),
+                        verifiedFormulaStatus = o.optString("verifiedFormulaStatus", "RECORDED"),
+                        balanceAfter = o.optDouble("balanceAfter", 0.0)
+                    ))
+                }
+            }
+
             if (root.has("transactions")) {
                 val txArray = root.getJSONArray("transactions")
                 val txList = mutableListOf<TransactionEntity>()
@@ -687,7 +1031,10 @@ class KasRepository(
                             note = o.optString("note", ""),
                             status = o.optString("status", "Selesai"),
                             inputTime = o.optLong("inputTime", System.currentTimeMillis()),
-                            inputBy = o.optString("inputBy", "Admin")
+                            inputBy = o.optString("inputBy", "Admin"),
+                            isArchived = o.optBoolean("isArchived", false),
+                            archivedAt = if (o.isNull("archivedAt")) null else o.optLong("archivedAt"),
+                            archivedBy = if (o.isNull("archivedBy")) null else o.optString("archivedBy")
                         )
                     )
                     count++
@@ -716,62 +1063,76 @@ class KasRepository(
         return try {
             val lines = csvContent.lines().filter { it.isNotBlank() }
             if (lines.size <= 1) return Result.success(0)
-            val header = lines.first()
+
             val dataRows = lines.drop(1)
             val txList = mutableListOf<TransactionEntity>()
+            val errors = mutableListOf<String>()
 
-            dataRows.forEach { row ->
-                val cols = row.split(",").map { it.trim() }
-                if (cols.size >= 10) {
-                    val id = cols.getOrNull(0)?.ifBlank { generateId("TX") } ?: generateId("TX")
-                    val type = cols.getOrNull(1)?.uppercase() ?: "MASUK"
-                    val date = cols.getOrNull(2)?.ifBlank { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()) } ?: ""
-                    val time = cols.getOrNull(3)?.ifBlank { "12:00:00" } ?: "12:00:00"
-                    val account = cols.getOrNull(4)?.ifBlank { "Kas Tunai" } ?: "Kas Tunai"
-                    val toAccount = cols.getOrNull(5)?.takeIf { it.isNotBlank() }
-                    val name = cols.getOrNull(6)?.ifBlank { "Transaksi CSV" } ?: "Transaksi CSV"
-                    val category = cols.getOrNull(7)?.ifBlank { "Lainnya" } ?: "Lainnya"
-                    val desc = cols.getOrNull(8) ?: ""
-                    val amount = cols.getOrNull(9)?.toDoubleOrNull() ?: 0.0
-                    val alloc = cols.getOrNull(10)?.ifBlank { "Operasional" } ?: "Operasional"
-                    val pic = cols.getOrNull(11)?.ifBlank { "Admin" } ?: "Admin"
-                    val proof = cols.getOrNull(12) ?: ""
-                    val receiptNo = cols.getOrNull(13) ?: ""
-                    val status = cols.getOrNull(14)?.ifBlank { "Selesai" } ?: "Selesai"
+            dataRows.forEachIndexed { index, row ->
+                val rowNumber = index + 2
+                val cols = row.split(',').map { it.trim() }
+                if (cols.size < 10) {
+                    errors += "Baris $rowNumber: jumlah kolom kurang dari 10."
+                    return@forEachIndexed
+                }
 
-                    txList.add(
-                        TransactionEntity(
-                            id = id,
-                            type = type,
-                            date = date,
-                            time = time,
-                            account = account,
-                            toAccount = toAccount,
-                            name = name,
-                            category = category,
-                            description = desc,
-                            amount = amount,
-                            allocation = alloc,
-                            pic = pic,
-                            proofUrl = proof,
-                            receiptNo = receiptNo,
-                            status = status,
-                            inputTime = System.currentTimeMillis(),
-                            inputBy = "CSV Importer"
-                        )
+                val id = cols.getOrNull(0)?.takeIf { it.isNotBlank() } ?: generateId("TX")
+                val type = cols.getOrNull(1)?.uppercase().orEmpty()
+                val date = cols.getOrNull(2).orEmpty()
+                val time = cols.getOrNull(3).orEmpty().ifBlank { "00:00:00" }
+                val account = cols.getOrNull(4).orEmpty()
+                val toAccount = cols.getOrNull(5)?.takeIf { it.isNotBlank() }
+                val name = cols.getOrNull(6).orEmpty()
+                val category = cols.getOrNull(7).orEmpty()
+                val desc = cols.getOrNull(8).orEmpty()
+                val amount = cols.getOrNull(9)?.toDoubleOrNull() ?: Double.NaN
+                val alloc = cols.getOrNull(10).orEmpty().ifBlank { "Operasional" }
+                val pic = cols.getOrNull(11).orEmpty()
+                val proof = cols.getOrNull(12).orEmpty()
+                val receiptNo = cols.getOrNull(13).orEmpty()
+                val status = cols.getOrNull(14).orEmpty()
+
+                try {
+                    require(type in setOf("MASUK", "KELUAR", "TRANSFER")) { "tipe transaksi tidak valid" }
+                    require(date.matches(Regex("""\d{4}-\d{2}-\d{2}"""))) { "tanggal harus YYYY-MM-DD" }
+                    require(name.isNotBlank()) { "nama transaksi wajib diisi" }
+                    require(category.isNotBlank()) { "kategori wajib diisi" }
+                    require(status in setOf("Selesai", "Draft", "Pending", "Batal", "Dihapus")) { "status tidak valid" }
+                    val tx = TransactionEntity(
+                        id = id,
+                        type = type,
+                        date = date,
+                        time = time,
+                        account = account,
+                        toAccount = toAccount,
+                        name = name,
+                        category = category,
+                        description = desc,
+                        amount = amount,
+                        allocation = alloc,
+                        pic = pic,
+                        proofUrl = proof,
+                        receiptNo = receiptNo,
+                        status = status,
+                        inputTime = System.currentTimeMillis(),
+                        inputBy = "CSV Importer"
                     )
+                    validateTransaction(tx)
+                    txList += tx
+                } catch (e: IllegalArgumentException) {
+                    errors += "Baris $rowNumber: ${e.message ?: "data tidak valid"}"
                 }
             }
 
-            if (txList.isNotEmpty()) {
-                transactionDao.insertTransactions(txList)
+            if (errors.isNotEmpty()) {
+                return Result.failure(IllegalArgumentException(errors.take(20).joinToString("; ")))
             }
+            if (txList.isNotEmpty()) transactionDao.insertTransactions(txList)
             Result.success(txList.size)
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
-
     fun generatePrintableSummaryText(
         companyName: String,
         accounts: List<AccountWithBalance>,
@@ -799,8 +1160,8 @@ class KasRepository(
             sb.append("   • [${tx.date}] ${tx.name.take(25).padEnd(25)} : $sign Rp ${tx.amount.toLong()} (${tx.account})\n")
         }
         sb.append("\n====================================================\n")
-        sb.append("Status Audit: 100% Terverifikasi Seimbang\n")
-        sb.append("Sistem Kas Terintegrasi Google Sheets & Android\n")
+        sb.append("Status Audit: Ringkasan berdasarkan ledger aktif\n")
+        sb.append("Sistem Kas - Ringkasan Ledger Lokal\n")
         return sb.toString()
     }
 }

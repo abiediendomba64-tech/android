@@ -33,7 +33,6 @@ import androidx.compose.material.icons.filled.PieChart
 import androidx.compose.material.icons.filled.RemoveCircle
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.SwapHoriz
-import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -174,7 +173,7 @@ fun MainApp() {
                             color = Color.White
                         )
                         Text(
-                            text = "Terintegrasi Google Sheets Formula",
+                            text = "Data tersimpan lokal di perangkat",
                             fontSize = 12.sp,
                             color = Color.White.copy(alpha = 0.85f)
                         )
@@ -240,18 +239,7 @@ fun MainApp() {
                             Icon(imageVector = Icons.Default.Menu, contentDescription = "Menu Navigasi", tint = Color.White)
                         }
                     },
-                    actions = {
-                        IconButton(
-                            onClick = { kasViewModel.simpanDanSyncSekarang() },
-                            modifier = Modifier.testTag("appbar_sync_btn")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Sync,
-                                contentDescription = "Simpan & Sync",
-                                tint = Color.White
-                            )
-                        }
-                    },
+                    actions = {},
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = PrimaryNavy,
                         titleContentColor = Color.White
@@ -259,10 +247,7 @@ fun MainApp() {
                 )
             },
             bottomBar = {
-                // Bottom Bar for 4 daily essentials
-                val isBottomNavScreen = currentScreen in listOf(
-                    Screen.DASHBOARD, Screen.KAS_MASUK, Screen.KAS_KELUAR, Screen.TRANSAKSI_ALL
-                )
+                // Bottom navigation for the four daily ledger screens.
 
                 NavigationBar(
                     containerColor = MaterialTheme.colorScheme.surface,

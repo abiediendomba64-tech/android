@@ -149,7 +149,7 @@ fun LaporanScreen(
                                     📑 Total Transaksi: ${reportTransactions.size}
                                     💰 Saldo Kas Saat Ini: ${formatRupiah(kpis.totalBalance)}
                                     ------------------------------------
-                                    _Sistem Kas Terintegrasi_
+                                    _Sistem Kas_
                                 """.trimIndent()
                                 viewModel.kirimPesanWhatsApp(context, text)
                             },

@@ -11,7 +11,7 @@ data class BankReconEntity(
     val bookBalance: Double, // Saldo Buku Kas
     val statementBalance: Double, // Saldo Rekening Koran Bank
     val difference: Double, // Selisih = statementBalance - bookBalance
-    val status: String = "Cocok", // "Cocok", "Selisih"
+    val status: String = "Belum Diverifikasi", // "Cocok", "Selisih"
     val reconciledBy: String = "Bendahara",
     val reconciledAt: Long = System.currentTimeMillis(),
     val notes: String = ""

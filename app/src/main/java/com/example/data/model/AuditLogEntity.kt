@@ -7,11 +7,11 @@ import androidx.room.PrimaryKey
 data class AuditLogEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val timestamp: Long = System.currentTimeMillis(),
-    val dateFormatted: String, // "yyyy-MM-dd HH:mm:ss"
-    val action: String, // "INSERT_MASUK", "INSERT_KELUAR", "TRANSFER", "ARCHIVE", "RESTORE", "RECONCILE", "PAYROLL"
+    val dateFormatted: String,
+    val action: String,
     val recordId: String,
     val details: String,
     val user: String = "Admin",
-    val verifiedFormulaStatus: String = "VALID_SUMIFS", // Status audit rumus
+    val verifiedFormulaStatus: String = "RECORDED",
     val balanceAfter: Double = 0.0
 )

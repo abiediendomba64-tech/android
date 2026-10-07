@@ -70,7 +70,7 @@ fun KasMasukScreen(
     val todayStr = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()) }
 
     var date by remember { mutableStateOf(todayStr) }
-    var selectedAccount by remember { mutableStateOf(accounts.firstOrNull()?.name ?: "Kas Tunai") }
+    var selectedAccount by remember { mutableStateOf(accounts.firstOrNull()?.name.orEmpty()) }
     var transactionName by remember { mutableStateOf("Penjualan") }
     var selectedCategory by remember { mutableStateOf(viewModel.masterKategoriMasuk.first()) }
     var description by remember { mutableStateOf("") }
@@ -91,7 +91,7 @@ fun KasMasukScreen(
     var dateError by remember { mutableStateOf<String?>(null) }
     var formErrorBanner by remember { mutableStateOf<String?>(null) }
 
-    val accountNames = accounts.map { it.name }.ifEmpty { listOf("Kas Tunai", "Bank BCA", "Bank BRI", "Bank Mandiri") }
+    val accountNames = accounts.map { it.name }
 
     fun validateForm(): Boolean {
         var isValid = true
@@ -126,7 +126,7 @@ fun KasMasukScreen(
         }
 
         // Validate Account
-        if (selectedAccount.isBlank()) {
+        if (selectedAccount.isBlank() || selectedAccount !in accountNames) {
             accountError = "Akun penerima wajib dipilih"
             isValid = false
         } else {

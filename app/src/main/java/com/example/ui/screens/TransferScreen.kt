@@ -67,12 +67,12 @@ fun TransferScreen(
     val transferList = transactions.filter { it.type == "TRANSFER" }
     val totalTransfer = transferList.filter { it.status == "Selesai" }.sumOf { it.amount }
 
-    val accountNames = accounts.map { it.name }.ifEmpty { listOf("Kas Tunai", "Bank BCA", "Bank BRI", "Bank Mandiri") }
+    val accountNames = accounts.map { it.name }
     val todayStr = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()) }
 
     var date by remember { mutableStateOf(todayStr) }
-    var fromAccount by remember { mutableStateOf(accountNames.firstOrNull() ?: "Kas Tunai") }
-    var toAccount by remember { mutableStateOf(accountNames.getOrNull(1) ?: "Bank BCA") }
+    var fromAccount by remember { mutableStateOf(accountNames.firstOrNull().orEmpty()) }
+    var toAccount by remember { mutableStateOf(accountNames.getOrNull(1).orEmpty()) }
     var amountText by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("Transfer saldo antar akun") }
     var pic by remember { mutableStateOf(viewModel.masterPic.first()) }
@@ -101,7 +101,10 @@ fun TransferScreen(
             amountError = null
         }
 
-        if (fromAccount == toAccount) {
+        if (fromAccount.isBlank() || fromAccount !in accountNames || toAccount.isBlank() || toAccount !in accountNames) {
+            accountMatchError = "Pilih akun asal dan tujuan yang terdaftar"
+            isValid = false
+        } else if (fromAccount == toAccount) {
             accountMatchError = "Akun asal dan akun tujuan tidak boleh sama"
             isValid = false
         } else {

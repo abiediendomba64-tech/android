@@ -83,7 +83,7 @@ fun PiutangScreen(
     val context = LocalContext.current
     val allRecords by viewModel.receivables.collectAsStateWithLifecycle()
     val accounts by viewModel.accounts.collectAsStateWithLifecycle()
-    val accountNames = accounts.map { it.name }.ifEmpty { listOf("Kas Tunai", "Bank BCA") }
+    val accountNames = accounts.map { it.name }
 
     var activeTab by remember { mutableStateOf("Piutang") } // "Piutang" or "Hutang"
 
@@ -103,13 +103,13 @@ fun PiutangScreen(
     var partyName by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
     var amountInput by remember { mutableStateOf("") }
-    var dueDateInput by remember { mutableStateOf("2026-10-31") }
-    var selectedAccount by remember { mutableStateOf(accountNames.first()) }
+    var dueDateInput by remember { mutableStateOf("") }
+    var selectedAccount by remember { mutableStateOf(accountNames.firstOrNull().orEmpty()) }
     var notesInput by remember { mutableStateOf("") }
 
     // Pay form states
     var payAmountInput by remember { mutableStateOf("") }
-    var payAccount by remember { mutableStateOf(accountNames.first()) }
+    var payAccount by remember { mutableStateOf(accountNames.firstOrNull().orEmpty()) }
 
     Scaffold(
         floatingActionButton = {
@@ -468,7 +468,8 @@ fun PiutangScreen(
                 Button(
                     onClick = {
                         val amt = amountInput.toDoubleOrNull() ?: 0.0
-                        if (partyName.isNotBlank() && amt > 0) {
+                        val validDueDate = dueDateInput.matches(Regex("""\d{4}-\d{2}-\d{2}"""))
+                        if (partyName.isNotBlank() && amt > 0 && selectedAccount in accountNames && validDueDate) {
                             if (activeTab == "Piutang") {
                                 viewModel.tambahPiutang(
                                     customerName = partyName,
@@ -542,7 +543,7 @@ fun PiutangScreen(
                 Button(
                     onClick = {
                         val amt = payAmountInput.toDoubleOrNull() ?: 0.0
-                        if (amt > 0) {
+                        if (amt > 0 && amt <= target.remainingAmount && payAccount in accountNames) {
                             if (isPiutang) {
                                 viewModel.bayarPiutang(target.id, amt, payAccount)
                             } else {
