@@ -312,3 +312,21 @@ fun AuditLogScreen(
     }
 
 }
+
+@androidx.compose.runtime.Composable
+private fun AuditCheckItem(title: String, description: String) {
+    androidx.compose.material3.Card(
+        modifier = androidx.compose.ui.Modifier.fillMaxWidth(),
+        colors = androidx.compose.material3.CardDefaults.cardColors(
+            containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surfaceVariant
+        )
+    ) {
+        androidx.compose.foundation.layout.Column(
+            modifier = androidx.compose.ui.Modifier.padding(12.dp),
+            verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp)
+        ) {
+            androidx.compose.material3.Text(title, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold, fontSize = 12.sp)
+            androidx.compose.material3.Text(description, fontSize = 11.sp, color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
