@@ -164,7 +164,7 @@ class KasRepository(
                 recordId = id,
                 details = "Transaksi dipulihkan kembali ke buku ledger aktif",
                 user = "Admin",
-                verifiedFormulaStatus = "AUDITED"
+                verifiedFormulaStatus = "RECORDED"
             )
         )
     }
@@ -179,7 +179,7 @@ class KasRepository(
                 recordId = id,
                 details = "Transaksi dihapus permanen dari basis data",
                 user = "Admin",
-                verifiedFormulaStatus = "AUDITED"
+                verifiedFormulaStatus = "RECORDED"
             )
         )
     }
@@ -194,7 +194,7 @@ class KasRepository(
                 recordId = "TRASH-ALL",
                 details = "Seluruh arsip transaksi dibersihkan permanen",
                 user = "Admin",
-                verifiedFormulaStatus = "AUDITED"
+                verifiedFormulaStatus = "RECORDED"
             )
         )
     }
@@ -239,7 +239,7 @@ class KasRepository(
                 recordId = "ATT-BULK-$date",
                 details = "Pencatatan absensi cepat untuk seluruh karyawan hadir pada tanggal $date",
                 user = "Admin Absensi",
-                verifiedFormulaStatus = "AUDITED"
+                verifiedFormulaStatus = "RECORDED"
             )
         )
     }
@@ -353,7 +353,7 @@ class KasRepository(
                 recordId = newTx.id,
                 details = "Perubahan transaksi ${newTx.id}: [Lama: ${oldTx.name}, Rp ${oldTx.amount.toLong()}, ${oldTx.account}] -> [Baru: ${newTx.name}, Rp ${newTx.amount.toLong()}, ${newTx.account}]",
                 user = "Admin",
-                verifiedFormulaStatus = "AUDITED",
+                verifiedFormulaStatus = "RECORDED",
                 balanceAfter = 0.0
             )
         )
@@ -412,7 +412,7 @@ class KasRepository(
                 recordId = attendance.id,
                 details = "Absensi ${attendance.employeeName} (${attendance.status}) pada ${attendance.date}",
                 user = "Admin Absensi",
-                verifiedFormulaStatus = "AUDITED"
+                verifiedFormulaStatus = "RECORDED"
             )
         )
     }
