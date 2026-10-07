@@ -19,6 +19,7 @@ import com.example.data.model.EmployeeEntity
 import com.example.data.model.ReceivableEntity
 import com.example.data.model.TransactionEntity
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
@@ -272,6 +273,7 @@ class KasRepository(
         val current = receivableDao.getReceivableById(id)
             ?: throw IllegalArgumentException("Piutang $id tidak ditemukan.")
         require(paymentAmount.isFinite() && paymentAmount > 0.0) { "Nominal pembayaran harus lebih besar dari Rp 0." }
+        require(current.type == "PIUTANG") { "Record ${current.id} bukan piutang." }
         require(paymentAmount <= current.remainingAmount) { "Pembayaran melebihi sisa piutang ${current.id}." }
         require(accountDao.getAccountByName(targetAccount)?.isActive == true) { "Akun penerimaan $targetAccount tidak terdaftar atau nonaktif." }
         val updatedPaid = current.paidAmount + paymentAmount
@@ -308,6 +310,7 @@ class KasRepository(
         val current = receivableDao.getReceivableById(id)
             ?: throw IllegalArgumentException("Hutang $id tidak ditemukan.")
         require(paymentAmount.isFinite() && paymentAmount > 0.0) { "Nominal pembayaran harus lebih besar dari Rp 0." }
+        require(current.type == "HUTANG") { "Record ${current.id} bukan hutang." }
         require(paymentAmount <= current.remainingAmount) { "Pembayaran melebihi sisa hutang ${current.id}." }
         require(accountDao.getAccountByName(sourceAccount)?.isActive == true) { "Akun pembayaran $sourceAccount tidak terdaftar atau nonaktif." }
         val updatedPaid = current.paidAmount + paymentAmount
