@@ -40,7 +40,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
     private val repository: KasRepository
 
     init {
-        val database = AppDatabase.getDatabase(application, viewModelScope)
+        val database = AppDatabase.getDatabase(application)
         repository = KasRepository(
             transactionDao = database.transactionDao(),
             accountDao = database.accountDao(),
@@ -172,10 +172,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
     )
 
     // Settings state
-    val companyName = MutableStateFlow("PT Berkah Mitra Sejahtera")
-    val googleSheetsUrl = MutableStateFlow("https://docs.google.com/spreadsheets/d/1KasSheetIDExample/edit")
-    val autoBackupEnabled = MutableStateFlow(true)
-    val lastSyncTime = MutableStateFlow(SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(Date()))
+    val companyName = MutableStateFlow("Sistem Kas")
 
     // Form submission methods
     fun simpanKasMasuk(
@@ -308,13 +305,6 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun simpanDanSyncSekarang() {
-        viewModelScope.launch {
-            lastSyncTime.value = SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.getDefault()).format(Date())
-            _snackBarMessage.emit("Audit & Sinkronisasi selesai: Seluruh formula SUMIFS dan saldo akun berhasil di-audit & diverifikasi.")
-        }
-    }
-
     fun arsipkanTransaksi(tx: TransactionEntity) {
         viewModelScope.launch {
             repository.archiveTransaction(tx.id)
@@ -391,7 +381,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         viewModelScope.launch {
             val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
-            val id = "PT-" + SimpleDateFormat("yyyyMM", Locale.getDefault()).format(Date()) + "-" + (100..999).random()
+            val id = repository.generateId("PT")
             val r = ReceivableEntity(
                 id = id,
                 date = today,
@@ -432,7 +422,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         viewModelScope.launch {
             val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
-            val id = "HT-" + SimpleDateFormat("yyyyMM", Locale.getDefault()).format(Date()) + "-" + (100..999).random()
+            val id = repository.generateId("HT")
             val r = ReceivableEntity(
                 id = id,
                 type = "HUTANG",
@@ -482,7 +472,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         monthlySalary: Double
     ) {
         viewModelScope.launch {
-            val id = "EMP-" + (100..999).random()
+            val id = repository.generateId("EMP")
             val emp = EmployeeEntity(id, name, position, department, phone, dailyRate, monthlySalary)
             repository.saveEmployee(emp)
             _snackBarMessage.emit("Data karyawan $name ($id) berhasil ditambahkan.")
@@ -535,73 +525,51 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun bersihkanDataSampelKeDataReal(
-        saldoKasTunai: Double,
-        saldoBca: Double,
-        saldoBri: Double,
-        saldoMandiri: Double,
-        saldoKasBesar: Double,
-        onSuccess: () -> Unit = {}
-    ) {
-        viewModelScope.launch {
-            val balances = mapOf(
-                "Kas Tunai" to saldoKasTunai,
-                "Bank BCA" to saldoBca,
-                "Bank BRI" to saldoBri,
-                "Bank Mandiri" to saldoMandiri,
-                "Kas Besar" to saldoKasBesar
-            )
-            repository.bersihkanSemuaDataSampelKeDataReal(balances)
-            lastSyncTime.value = SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.getDefault()).format(Date())
-            _snackBarMessage.emit("Mode Data Real Aktif! Seluruh transaksi sampel dibersihkan dan saldo kas riil diterapkan.")
-            onSuccess()
-        }
-    }
-
     fun jalankanAuditSistem(onComplete: (String) -> Unit = {}) {
         viewModelScope.launch {
-            val accs = accountsWithBalance.value
-            val txs = activeTransactions.value
-            val totalSaldo = accs.sumOf { it.currentBalance }
-            val nowStamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-
-            val report = """
-                *BERITA ACARA AUDIT SISTEM KAS & FORMULA*
-                Waktu Audit: $nowStamp
-                Perusahaan: ${companyName.value}
-                Auditor: Tim Verifikasi Sistem Kas
-                ====================================
-                STATUS HASIL AUDIT: 100% TERVERIFIKASI & SEIMBANG
-                Formula SUMIFS: AKTIF & VALID
-                
-                *Rekap Saldo Terverifikasi per Akun:*
-                ${accs.joinToString("\n") { 
-                    "• ${it.account.name}: ${formatRupiah(it.currentBalance)} [Masuk: ${formatRupiah(it.totalMasuk)}, Keluar: ${formatRupiah(it.totalKeluar)}] -> VALID" 
-                }}
-                ====================================
-                Total Saldo Kas & Bank: ${formatRupiah(totalSaldo)}
-                Total Transaksi Buku Besar: ${txs.size} Transaksi
-                Total Catatan Audit Trail: ${auditLogs.value.size + 1} Catatan
-                ====================================
-                _Sistem Kas Terintegrasi Google Sheets & Android_
-            """.trimIndent()
-
-            val auditEntry = AuditLogEntity(
-                dateFormatted = nowStamp,
-                action = "SYSTEM_AUDIT_VERIFIED",
-                recordId = "AUDIT-" + System.currentTimeMillis().toString().takeLast(6),
-                details = "Audit menyeluruh formula SUMIFS dan saldo 5 akun selesai. Total kas terverifikasi: ${formatRupiah(totalSaldo)} (${txs.size} transaksi buku besar).",
-                user = "Auditor Keuangan",
-                verifiedFormulaStatus = "AUDIT_OK_100%",
-                balanceAfter = totalSaldo
+            val result = repository.runIntegrityAudit(
+                accounts = accounts.value,
+                transactions = activeTransactions.value,
+                budgets = budgets.value,
+                receivables = receivables.value,
+                employees = employees.value,
+                attendances = attendances.value
             )
-            repository.logDirectAudit(auditEntry)
-            lastSyncTime.value = SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.getDefault()).format(Date())
-            _snackBarMessage.emit("Audit selesai: Semua formula & saldo akun terverifikasi seimbang 100%!")
+            val accountsSnapshot = accountsWithBalance.value
+            val totalSaldo = accountsSnapshot.sumOf { it.currentBalance }
+            val report = buildString {
+                appendLine("*HASIL PEMERIKSAAN INTEGRITAS SISTEM KAS*")
+                appendLine("Waktu Pemeriksaan: ${result.checkedAt}")
+                appendLine("Status: ${if (result.passed) "LULUS" else "GAGAL"}")
+                appendLine("Total saldo ledger: ${formatRupiah(totalSaldo)}")
+                appendLine("Transaksi aktif: ${activeTransactions.value.size}")
+                if (result.issues.isEmpty()) {
+                    appendLine("Tidak ditemukan ketidaksesuaian data pada pemeriksaan ini.")
+                } else {
+                    appendLine("Temuan:")
+                    result.issues.take(50).forEach { appendLine("- $it") }
+                    if (result.issues.size > 50) appendLine("- ... ${result.issues.size - 50} temuan lainnya")
+                }
+                appendLine("Pemeriksaan dilakukan terhadap ledger lokal aplikasi.")
+            }
+            repository.logDirectAudit(
+                AuditLogEntity(
+                    dateFormatted = result.checkedAt,
+                    action = if (result.passed) "SYSTEM_AUDIT_PASS" else "SYSTEM_AUDIT_FAIL",
+                    recordId = "AUDIT-" + System.currentTimeMillis().toString().takeLast(8),
+                    details = "Pemeriksaan integritas: ${result.issues.size} temuan; ${activeTransactions.value.size} transaksi aktif; saldo ${formatRupiah(totalSaldo)}.",
+                    user = "Sistem Audit",
+                    verifiedFormulaStatus = if (result.passed) "AUDIT_PASS" else "AUDIT_FAIL",
+                    balanceAfter = totalSaldo
+                )
+            )
+            _snackBarMessage.emit(
+                if (result.passed) "Audit selesai: tidak ditemukan ketidaksesuaian."
+                else "Audit selesai: ditemukan ${result.issues.size} ketidaksesuaian. Periksa hasil audit."
+            )
             onComplete(report)
         }
     }
-
     fun cairkanGajiAbsensiKeKasKeluar(
         period: String,
         totalGaji: Double,
