@@ -30,7 +30,6 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.SwapHoriz
-import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -88,7 +87,6 @@ fun DashboardScreen(
     val accountsWithBalance by viewModel.accountsWithBalance.collectAsStateWithLifecycle()
     val transactions by viewModel.activeTransactions.collectAsStateWithLifecycle()
     val companyName by viewModel.companyName.collectAsStateWithLifecycle()
-    val lastSyncTime by viewModel.lastSyncTime.collectAsStateWithLifecycle()
 
     LazyColumn(
         modifier = modifier
@@ -138,21 +136,6 @@ fun DashboardScreen(
                                     color = Color.White.copy(alpha = 0.9f)
                                 )
                             }
-                            IconButton(
-                                onClick = { viewModel.simpanDanSyncSekarang() },
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .clip(CircleShape)
-                                    .background(Color.White.copy(alpha = 0.2f))
-                                    .testTag("sync_header_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Sync,
-                                    contentDescription = "Sync Sekarang",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
                         }
 
                         Spacer(modifier = Modifier.height(14.dp))
@@ -177,7 +160,7 @@ fun DashboardScreen(
                                 modifier = Modifier.size(14.dp)
                             )
                             Text(
-                                text = "Formula SUMIFS Aktif • Terakhir Sync: $lastSyncTime",
+                                text = "Saldo dihitung dari transaksi tersimpan",
                                 fontSize = 11.sp,
                                 color = Color.White.copy(alpha = 0.85f)
                             )
