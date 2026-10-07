@@ -440,7 +440,7 @@ class KasRepository(
                 dateFormatted = nowStamp,
                 action = "BANK_RECONCILE",
                 recordId = recon.id,
-                details = "Rekonsiliasi ${recon.accountName} periode ${recon.period}: Buku Rp ${recon.bookBalance.toLong()} vs Bank Rp ${recon.statementBalance.toLong()} (Selisih: Rp ${recon.difference.toLong()} - ${recon.status})",
+                details = "Rekonsiliasi ${normalized.accountName} periode ${normalized.period}: Buku Rp ${normalized.bookBalance.toLong()} vs Bank Rp ${normalized.statementBalance.toLong()} (Selisih: Rp ${normalized.difference.toLong()} - ${normalized.status})",
                 user = recon.reconciledBy,
                 verifiedFormulaStatus = "RECORDED"
             )
@@ -1063,62 +1063,76 @@ class KasRepository(
         return try {
             val lines = csvContent.lines().filter { it.isNotBlank() }
             if (lines.size <= 1) return Result.success(0)
-            val header = lines.first()
+
             val dataRows = lines.drop(1)
             val txList = mutableListOf<TransactionEntity>()
+            val errors = mutableListOf<String>()
 
-            dataRows.forEach { row ->
-                val cols = row.split(",").map { it.trim() }
-                if (cols.size >= 10) {
-                    val id = cols.getOrNull(0)?.ifBlank { generateId("TX") } ?: generateId("TX")
-                    val type = cols.getOrNull(1)?.uppercase() ?: "MASUK"
-                    val date = cols.getOrNull(2)?.ifBlank { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()) } ?: ""
-                    val time = cols.getOrNull(3)?.ifBlank { "12:00:00" } ?: "12:00:00"
-                    val account = cols.getOrNull(4)?.ifBlank { "Kas Tunai" } ?: "Kas Tunai"
-                    val toAccount = cols.getOrNull(5)?.takeIf { it.isNotBlank() }
-                    val name = cols.getOrNull(6)?.ifBlank { "Transaksi CSV" } ?: "Transaksi CSV"
-                    val category = cols.getOrNull(7)?.ifBlank { "Lainnya" } ?: "Lainnya"
-                    val desc = cols.getOrNull(8) ?: ""
-                    val amount = cols.getOrNull(9)?.toDoubleOrNull() ?: 0.0
-                    val alloc = cols.getOrNull(10)?.ifBlank { "Operasional" } ?: "Operasional"
-                    val pic = cols.getOrNull(11)?.ifBlank { "Admin" } ?: "Admin"
-                    val proof = cols.getOrNull(12) ?: ""
-                    val receiptNo = cols.getOrNull(13) ?: ""
-                    val status = cols.getOrNull(14)?.ifBlank { "Selesai" } ?: "Selesai"
+            dataRows.forEachIndexed { index, row ->
+                val rowNumber = index + 2
+                val cols = row.split(',').map { it.trim() }
+                if (cols.size < 10) {
+                    errors += "Baris $rowNumber: jumlah kolom kurang dari 10."
+                    return@forEachIndexed
+                }
 
-                    txList.add(
-                        TransactionEntity(
-                            id = id,
-                            type = type,
-                            date = date,
-                            time = time,
-                            account = account,
-                            toAccount = toAccount,
-                            name = name,
-                            category = category,
-                            description = desc,
-                            amount = amount,
-                            allocation = alloc,
-                            pic = pic,
-                            proofUrl = proof,
-                            receiptNo = receiptNo,
-                            status = status,
-                            inputTime = System.currentTimeMillis(),
-                            inputBy = "CSV Importer"
-                        )
+                val id = cols.getOrNull(0)?.takeIf { it.isNotBlank() } ?: generateId("TX")
+                val type = cols.getOrNull(1)?.uppercase().orEmpty()
+                val date = cols.getOrNull(2).orEmpty()
+                val time = cols.getOrNull(3).orEmpty().ifBlank { "00:00:00" }
+                val account = cols.getOrNull(4).orEmpty()
+                val toAccount = cols.getOrNull(5)?.takeIf { it.isNotBlank() }
+                val name = cols.getOrNull(6).orEmpty()
+                val category = cols.getOrNull(7).orEmpty()
+                val desc = cols.getOrNull(8).orEmpty()
+                val amount = cols.getOrNull(9)?.toDoubleOrNull() ?: Double.NaN
+                val alloc = cols.getOrNull(10).orEmpty().ifBlank { "Operasional" }
+                val pic = cols.getOrNull(11).orEmpty()
+                val proof = cols.getOrNull(12).orEmpty()
+                val receiptNo = cols.getOrNull(13).orEmpty()
+                val status = cols.getOrNull(14).orEmpty()
+
+                try {
+                    require(type in setOf("MASUK", "KELUAR", "TRANSFER")) { "tipe transaksi tidak valid" }
+                    require(date.matches(Regex("""\d{4}-\d{2}-\d{2}"""))) { "tanggal harus YYYY-MM-DD" }
+                    require(name.isNotBlank()) { "nama transaksi wajib diisi" }
+                    require(category.isNotBlank()) { "kategori wajib diisi" }
+                    require(status in setOf("Selesai", "Draft", "Pending", "Batal", "Dihapus")) { "status tidak valid" }
+                    val tx = TransactionEntity(
+                        id = id,
+                        type = type,
+                        date = date,
+                        time = time,
+                        account = account,
+                        toAccount = toAccount,
+                        name = name,
+                        category = category,
+                        description = desc,
+                        amount = amount,
+                        allocation = alloc,
+                        pic = pic,
+                        proofUrl = proof,
+                        receiptNo = receiptNo,
+                        status = status,
+                        inputTime = System.currentTimeMillis(),
+                        inputBy = "CSV Importer"
                     )
+                    validateTransaction(tx)
+                    txList += tx
+                } catch (e: IllegalArgumentException) {
+                    errors += "Baris $rowNumber: ${e.message ?: "data tidak valid"}"
                 }
             }
 
-            if (txList.isNotEmpty()) {
-                transactionDao.insertTransactions(txList)
+            if (errors.isNotEmpty()) {
+                return Result.failure(IllegalArgumentException(errors.take(20).joinToString("; ")))
             }
+            if (txList.isNotEmpty()) transactionDao.insertTransactions(txList)
             Result.success(txList.size)
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
-
     fun generatePrintableSummaryText(
         companyName: String,
         accounts: List<AccountWithBalance>,
