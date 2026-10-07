@@ -57,6 +57,15 @@ class ExampleRobolectricTest {
     }
 
     @Test
+    fun freshDatabaseStartsWithoutSeedData() = runBlocking {
+        assertTrue(db.accountDao().getAllAccounts().first().isEmpty())
+        assertTrue(db.transactionDao().getAllActiveTransactions().first().isEmpty())
+        assertTrue(db.budgetDao().getAllBudgets().first().isEmpty())
+        assertTrue(db.employeeDao().getAllActiveEmployees().first().isEmpty())
+        assertTrue(db.attendanceDao().getAllAttendances().first().isEmpty())
+        assertTrue(db.auditDao().getRecentAuditLogs().first().isEmpty())
+    }
+    @Test
     fun testReadAppNameString() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val appName = context.getString(R.string.app_name)
