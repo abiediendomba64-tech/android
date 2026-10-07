@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Outer Shield / Vault Card Base -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M32,30 C32,26.7 34.7,24 38,24 L70,24 C73.3,24 76,26.7 76,30 L76,78 C76,81.3 73.3,84 70,84 L38,84 C34.7,84 32,81.3 32,78 Z" />
+    <!-- Inner Accent Screen / Card Body -->
+    <path
+        android:fillColor="#0284C7"
+        android:pathData="M36,29 C36,27.9 36.9,27 38,27 L70,27 C71.1,27 72,27.9 72,29 L72,79 C72,80.1 71.1,81 70,81 L38,81 C36.9,81 36,80.1 36,79 Z" />
+    <!-- Golden Coin Accent at Center Top -->
+    <path
+        android:fillColor="#FBBF24"
+        android:pathData="M54,45 m-13,0 a13,13 0 1,0 26,0 a13,13 0 1,0 -26,0" />
+    <!-- Currency / Rupiah Symbol 'Rp' in Coin -->
+    <path
+        android:fillColor="#78350F"
+        android:pathData="M48,39 L53,39 C55.2,39 56.5,40.1 56.5,41.8 C56.5,43.2 55.4,44.3 53.6,44.5 L56.8,50 L54.2,50 L51.5,45.2 L49.8,45.2 L49.8,50 L48,50 Z M49.8,43.7 L52.8,43.7 C54,43.7 54.8,43 54.8,42 C54.8,41 54,40.4 52.8,40.4 L49.8,40.4 Z" />
+    <!-- Down Arrow (Kas Masuk - Green Accent) -->
+    <path
+        android:fillColor="#22C55E"
+        android:pathData="M43,62 L43,69 L40.5,69 L45,74.5 L49.5,69 L47,69 L47,62 Z" />
+    <!-- Up Arrow (Kas Keluar - Coral/Red Accent) -->
+    <path
+        android:fillColor="#EF4444"
+        android:pathData="M65,74.5 L65,67.5 L67.5,67.5 L63,62 L58.5,67.5 L61,67.5 L61,74.5 Z" />
+    <!-- Sparkle / Star highlight on top right -->
+    <path
+        android:fillColor="#FDE047"
+        android:pathData="M70,33 L71.5,36.5 L75,38 L71.5,39.5 L70,43 L68.5,39.5 L65,38 L68.5,36.5 Z" />
+</vector>

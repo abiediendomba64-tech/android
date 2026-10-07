@@ -1,0 +1,6 @@
+{
+  "name": "Sistem Kas",
+  "description": "Sistem Kas Terintegrasi untuk pembukuan kas masuk, kas keluar, transfer akun, anggaran, piutang, dan laporan keuangan terhubung.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
