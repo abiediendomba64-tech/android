@@ -98,7 +98,7 @@ fun RekonsiliasiArusKasScreen(
 
     // Bank Recon Form States
     val bankAccountNames = accounts.filter { it.account.type == "Bank" || it.account.type == "Kas" }.map { it.account.name }
-        .ifEmpty { listOf("Bank BCA", "Kas Tunai") }
+        
     var reconAccountName by remember { mutableStateOf(bankAccountNames.first()) }
     var reconPeriod by remember { mutableStateOf(SimpleDateFormat("yyyy-MM", Locale.getDefault()).format(Date())) }
     var statementBalanceInput by remember { mutableStateOf("") }
