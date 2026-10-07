@@ -199,7 +199,12 @@ class KasRepository(
     }
 
     suspend fun saveAccount(account: AccountEntity) {
-        accountDao.insertAccount(account)
+        require(account.name.isNotBlank()) { "Nama akun wajib diisi." }
+        require(account.type in setOf("Kas", "Bank", "E-Wallet", "Lainnya")) { "Jenis akun tidak valid." }
+        require(account.initialBalance.isFinite() && account.initialBalance >= 0.0) { "Saldo awal akun tidak valid." }
+        val existing = accountDao.getAccountByName(account.name.trim())
+        require(existing == null || existing.id == account.id) { "Nama akun sudah digunakan." }
+        accountDao.insertAccount(account.copy(name = account.name.trim()))
     }
 
     suspend fun bulkMarkAllEmployeesHadir(date: String) {
@@ -243,6 +248,9 @@ class KasRepository(
     }
 
     suspend fun saveBudget(budget: BudgetEntity) {
+        require(budget.period.equals("All", ignoreCase = true) || budget.period.matches(Regex("""\\d{4}-\\d{2}"""))) { "Periode anggaran harus YYYY-MM atau All." }
+        require(budget.category.isNotBlank()) { "Kategori anggaran wajib diisi." }
+        require(budget.budgetAmount.isFinite() && budget.budgetAmount >= 0.0) { "Nominal anggaran tidak valid." }
         budgetDao.insertBudget(budget)
     }
 
@@ -251,6 +259,12 @@ class KasRepository(
     }
 
     suspend fun saveReceivable(receivable: ReceivableEntity) {
+        require(receivable.type in setOf("PIUTANG", "HUTANG")) { "Jenis tagihan tidak valid." }
+        require(receivable.customerName.isNotBlank()) { "Nama pihak wajib diisi." }
+        require(receivable.totalAmount.isFinite() && receivable.totalAmount > 0.0) { "Nominal tagihan harus lebih besar dari Rp 0." }
+        require(receivable.paidAmount.isFinite() && receivable.paidAmount >= 0.0 && receivable.paidAmount <= receivable.totalAmount) { "Nominal pembayaran tagihan tidak valid." }
+        require(receivable.dueDate.matches(Regex("""\\d{4}-\\d{2}-\\d{2}"""))) { "Tanggal jatuh tempo harus YYYY-MM-DD." }
+        require(accountDao.getAccountByName(receivable.targetAccount)?.isActive == true) { "Akun terkait tidak terdaftar atau nonaktif." }
         receivableDao.insertReceivable(receivable)
     }
 
@@ -356,6 +370,10 @@ class KasRepository(
 
     // Employee & Attendance Operations
     suspend fun saveEmployee(employee: EmployeeEntity) {
+        require(employee.name.isNotBlank()) { "Nama karyawan wajib diisi." }
+        require(employee.dailyRate.isFinite() && employee.dailyRate >= 0.0) { "Uang harian tidak valid." }
+        require(employee.monthlySalary.isFinite() && employee.monthlySalary >= 0.0) { "Gaji bulanan tidak valid." }
+        require(employeeDao.getEmployeeById(employee.id) == null) { "ID karyawan sudah digunakan." }
         employeeDao.insertEmployee(employee)
     }
 
@@ -376,6 +394,12 @@ class KasRepository(
         attendanceDao.getAttendancesByPeriod(start, end)
 
     suspend fun saveAttendance(attendance: AttendanceEntity) {
+        require(attendance.employeeId.isNotBlank()) { "ID karyawan wajib diisi." }
+        require(employeeDao.getEmployeeById(attendance.employeeId) != null) { "Karyawan tidak ditemukan." }
+        require(attendance.date.matches(Regex("""\\d{4}-\\d{2}-\\d{2}"""))) { "Tanggal absensi harus YYYY-MM-DD." }
+        require(attendance.status in setOf("Hadir", "Izin", "Sakit", "Alpa", "Cuti")) { "Status absensi tidak valid." }
+        require(attendance.overtimeHours.isFinite() && attendance.overtimeHours >= 0.0) { "Jam lembur tidak valid." }
+        require(attendance.dailyAllowance.isFinite() && attendance.dailyAllowance >= 0.0) { "Uang harian tidak valid." }
         attendanceDao.insertAttendance(attendance)
         val nowStamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
         auditDao.insertAuditLog(
@@ -396,7 +420,15 @@ class KasRepository(
 
     // Bank Reconciliation Operations
     suspend fun saveBankReconciliation(recon: BankReconEntity) {
-        bankReconDao.insertReconciliation(recon)
+        require(accountDao.getAccountByName(recon.accountName)?.isActive == true) { "Akun rekonsiliasi tidak terdaftar atau nonaktif." }
+        require(recon.statementBalance.isFinite() && recon.statementBalance >= 0.0) { "Saldo rekening koran tidak valid." }
+        require(recon.period.matches(Regex("""\\d{4}-\\d{2}"""))) { "Periode rekonsiliasi harus YYYY-MM." }
+        val computedDifference = recon.statementBalance - recon.bookBalance
+        val normalized = recon.copy(
+            difference = computedDifference,
+            status = if (kotlin.math.abs(computedDifference) < 1.0) "Cocok" else "Selisih"
+        )
+        bankReconDao.insertReconciliation(normalized)
         val nowStamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
         auditDao.insertAuditLog(
             AuditLogEntity(
