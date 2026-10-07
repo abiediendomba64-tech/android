@@ -514,33 +514,38 @@ class KasRepository(
         startDate: String,
         endDate: String
     ): CashFlowStatement {
-        val settledTx = transactions.filter { it.status == "Selesai" && it.date >= startDate && it.date <= endDate }
+        val settledTx = transactions.filter { it.status == "Selesai" }
+        val periodTx = settledTx.filter { it.date >= startDate && it.date <= endDate }
 
-        // Operating Flow
-        val opInflow = settledTx.filter {
-            it.type == "MASUK" && (it.category in listOf("Penjualan", "Piutang Masuk", "Pendapatan Lain", "Operasional"))
+        val opInflow = periodTx.filter {
+            it.type == "MASUK" && it.category !in listOf("Modal", "Investasi")
         }.sumOf { it.amount }
 
-        val opOutflow = settledTx.filter {
-            it.type == "KELUAR" && (it.allocation in listOf("Operasional", "Gaji", "Marketing") || it.category in listOf("Belanja Barang", "Gaji", "Listrik/Internet", "Sewa", "Transportasi"))
-        }.sumOf { it.amount }
-
-        // Investing Flow (Proyek, Pengadaan inventaris besar)
-        val invOutflow = settledTx.filter {
+        val investingIds = periodTx.filter {
             it.type == "KELUAR" && (it.allocation == "Proyek" || it.project.isNotBlank())
-        }.sumOf { it.amount }
+        }.map { it.id }.toSet()
 
-        // Financing Flow (Modal, Transfer Masuk/Keluar)
-        val finInflow = settledTx.filter {
+        val invOutflow = periodTx.filter { it.id in investingIds }.sumOf { it.amount }
+        val opOutflow = periodTx.filter { it.type == "KELUAR" && it.id !in investingIds }.sumOf { it.amount }
+
+        val finInflow = periodTx.filter {
             it.type == "MASUK" && it.category in listOf("Modal", "Investasi")
         }.sumOf { it.amount }
 
         val netOp = opInflow - opOutflow
         val netInv = -invOutflow
         val netFin = finInflow
-
         val netTotal = netOp + netInv + netFin
-        val openingBal = accounts.sumOf { it.initialBalance }
+
+        // Opening balance is the consolidated ledger balance immediately before the report period.
+        val openingNet = settledTx.filter { it.date < startDate }.sumOf {
+            when (it.type) {
+                "MASUK" -> it.amount
+                "KELUAR" -> -it.amount
+                else -> 0.0 // Internal transfers are neutral to consolidated cash.
+            }
+        }
+        val openingBal = accounts.sumOf { it.initialBalance } + openingNet
         val closingBal = openingBal + netTotal
 
         return CashFlowStatement(
@@ -557,7 +562,6 @@ class KasRepository(
             closingBalance = closingBal
         )
     }
-
     fun calculateAttendanceSummary(attendances: List<AttendanceEntity>): AttendanceSummary {
         val empSet = attendances.map { it.employeeId }.toSet()
         val hadir = attendances.count { it.status.equals("Hadir", ignoreCase = true) }
