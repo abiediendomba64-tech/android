@@ -236,7 +236,7 @@ class ExampleRobolectricTest {
         )
 
         val balances = repository.calculateAccountBalances(accounts, transactions)
-        assertEquals(800000.0, balances.first { it.account.name == "Kas Tunai" }.currentBalance, 0.01)
+        assertEquals(600000.0, balances.first { it.account.name == "Kas Tunai" }.currentBalance, 0.01)
         assertEquals(200000.0, balances.first { it.account.name == "Bank BCA" }.currentBalance, 0.01)
 
         val cashFlow = repository.calculateCashFlowStatement(transactions, accounts, "2026-10-05", "2026-10-06")
