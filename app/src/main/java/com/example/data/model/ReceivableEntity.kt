@@ -13,7 +13,7 @@ data class ReceivableEntity(
     val totalAmount: Double,
     val dueDate: String,
     val paidAmount: Double = 0.0,
-    val targetAccount: String = "Kas Tunai",
+    val targetAccount: String = "",
     val notes: String = "",
     val status: String = "Belum Jatuh Tempo"
 ) {
