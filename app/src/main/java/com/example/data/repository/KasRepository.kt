@@ -695,12 +695,13 @@ class KasRepository(
         notes: List<CashNoteEntity>
     ): String {
         val root = JSONObject()
-        root.put("app", "Sistem Kas Terintegrasi")
-        root.put("version", "2.0")
+        root.put("app", "Sistem Kas")
+        root.put("version", "3.0")
         root.put("timestamp", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()))
 
         val txArray = JSONArray()
-        transactions.forEach { tx ->
+        val allTransactions = (transactions + transactionDao.getArchivedTransactions().first()).distinctBy { it.id }
+        allTransactions.forEach { tx ->
             val obj = JSONObject().apply {
                 put("id", tx.id)
                 put("type", tx.type)
@@ -721,6 +722,9 @@ class KasRepository(
                 put("status", tx.status)
                 put("inputTime", tx.inputTime)
                 put("inputBy", tx.inputBy)
+                put("isArchived", tx.isArchived)
+                put("archivedAt", tx.archivedAt ?: JSONObject.NULL)
+                put("archivedBy", tx.archivedBy ?: JSONObject.NULL)
             }
             txArray.put(obj)
         }
@@ -782,6 +786,72 @@ class KasRepository(
             })
         }
         root.put("notes", noteArray)
+
+        val employeeArray = JSONArray()
+        employeeDao.getAllEmployeesList().forEach { employee ->
+            employeeArray.put(JSONObject().apply {
+                put("id", employee.id)
+                put("name", employee.name)
+                put("position", employee.position)
+                put("department", employee.department)
+                put("phone", employee.phone)
+                put("dailyRate", employee.dailyRate)
+                put("monthlySalary", employee.monthlySalary)
+                put("isActive", employee.isActive)
+            })
+        }
+        root.put("employees", employeeArray)
+
+        val attendanceArray = JSONArray()
+        attendanceDao.getAllAttendances().first().forEach { attendance ->
+            attendanceArray.put(JSONObject().apply {
+                put("id", attendance.id)
+                put("employeeId", attendance.employeeId)
+                put("employeeName", attendance.employeeName)
+                put("department", attendance.department)
+                put("date", attendance.date)
+                put("timeIn", attendance.timeIn)
+                put("timeOut", attendance.timeOut)
+                put("status", attendance.status)
+                put("overtimeHours", attendance.overtimeHours)
+                put("dailyAllowance", attendance.dailyAllowance)
+                put("notes", attendance.notes)
+            })
+        }
+        root.put("attendances", attendanceArray)
+
+        val auditArray = JSONArray()
+        auditDao.getAllAuditLogs().forEach { audit ->
+            auditArray.put(JSONObject().apply {
+                put("id", audit.id)
+                put("timestamp", audit.timestamp)
+                put("dateFormatted", audit.dateFormatted)
+                put("action", audit.action)
+                put("recordId", audit.recordId)
+                put("details", audit.details)
+                put("user", audit.user)
+                put("verifiedFormulaStatus", audit.verifiedFormulaStatus)
+                put("balanceAfter", audit.balanceAfter)
+            })
+        }
+        root.put("auditLogs", auditArray)
+
+        val reconArray = JSONArray()
+        bankReconDao.getAllReconciliations().first().forEach { recon ->
+            reconArray.put(JSONObject().apply {
+                put("id", recon.id)
+                put("accountName", recon.accountName)
+                put("period", recon.period)
+                put("bookBalance", recon.bookBalance)
+                put("statementBalance", recon.statementBalance)
+                put("difference", recon.difference)
+                put("status", recon.status)
+                put("reconciledBy", recon.reconciledBy)
+                put("reconciledAt", recon.reconciledAt)
+                put("notes", recon.notes)
+            })
+        }
+        root.put("bankReconciliations", reconArray)
 
         return root.toString(2)
     }
@@ -858,6 +928,84 @@ class KasRepository(
                 }
                 noteDao.insertNotes(list)
             }
+            if (root.has("employees")) {
+                val array = root.getJSONArray("employees")
+                val list = mutableListOf<EmployeeEntity>()
+                for (i in 0 until array.length()) {
+                    val o = array.getJSONObject(i)
+                    list.add(EmployeeEntity(
+                        id = o.getString("id"),
+                        name = o.getString("name"),
+                        position = o.optString("position", ""),
+                        department = o.optString("department", ""),
+                        phone = o.optString("phone", ""),
+                        dailyRate = o.optDouble("dailyRate", 0.0),
+                        monthlySalary = o.optDouble("monthlySalary", 0.0),
+                        isActive = o.optBoolean("isActive", true)
+                    ))
+                }
+                employeeDao.insertEmployees(list)
+            }
+
+            if (root.has("attendances")) {
+                val array = root.getJSONArray("attendances")
+                val list = mutableListOf<AttendanceEntity>()
+                for (i in 0 until array.length()) {
+                    val o = array.getJSONObject(i)
+                    list.add(AttendanceEntity(
+                        id = o.getString("id"),
+                        employeeId = o.getString("employeeId"),
+                        employeeName = o.getString("employeeName"),
+                        department = o.optString("department", ""),
+                        date = o.getString("date"),
+                        timeIn = o.optString("timeIn", ""),
+                        timeOut = o.optString("timeOut", ""),
+                        status = o.optString("status", ""),
+                        overtimeHours = o.optDouble("overtimeHours", 0.0),
+                        dailyAllowance = o.optDouble("dailyAllowance", 0.0),
+                        notes = o.optString("notes", "")
+                    ))
+                }
+                attendanceDao.insertAttendances(list)
+            }
+
+            if (root.has("bankReconciliations")) {
+                val array = root.getJSONArray("bankReconciliations")
+                for (i in 0 until array.length()) {
+                    val o = array.getJSONObject(i)
+                    bankReconDao.insertReconciliation(BankReconEntity(
+                        id = o.getString("id"),
+                        accountName = o.getString("accountName"),
+                        period = o.getString("period"),
+                        bookBalance = o.optDouble("bookBalance", 0.0),
+                        statementBalance = o.optDouble("statementBalance", 0.0),
+                        difference = o.optDouble("difference", 0.0),
+                        status = o.optString("status", "Belum Diverifikasi"),
+                        reconciledBy = o.optString("reconciledBy", "Bendahara"),
+                        reconciledAt = o.optLong("reconciledAt", System.currentTimeMillis()),
+                        notes = o.optString("notes", "")
+                    ))
+                }
+            }
+
+            if (root.has("auditLogs")) {
+                val array = root.getJSONArray("auditLogs")
+                for (i in 0 until array.length()) {
+                    val o = array.getJSONObject(i)
+                    auditDao.insertAuditLog(AuditLogEntity(
+                        id = o.optLong("id", 0L),
+                        timestamp = o.optLong("timestamp", System.currentTimeMillis()),
+                        dateFormatted = o.getString("dateFormatted"),
+                        action = o.getString("action"),
+                        recordId = o.getString("recordId"),
+                        details = o.optString("details", ""),
+                        user = o.optString("user", "Admin"),
+                        verifiedFormulaStatus = o.optString("verifiedFormulaStatus", "RECORDED"),
+                        balanceAfter = o.optDouble("balanceAfter", 0.0)
+                    ))
+                }
+            }
+
             if (root.has("transactions")) {
                 val txArray = root.getJSONArray("transactions")
                 val txList = mutableListOf<TransactionEntity>()
@@ -883,7 +1031,10 @@ class KasRepository(
                             note = o.optString("note", ""),
                             status = o.optString("status", "Selesai"),
                             inputTime = o.optLong("inputTime", System.currentTimeMillis()),
-                            inputBy = o.optString("inputBy", "Admin")
+                            inputBy = o.optString("inputBy", "Admin"),
+                            isArchived = o.optBoolean("isArchived", false),
+                            archivedAt = if (o.isNull("archivedAt")) null else o.optLong("archivedAt"),
+                            archivedBy = if (o.isNull("archivedBy")) null else o.optString("archivedBy")
                         )
                     )
                     count++
