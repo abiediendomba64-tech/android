@@ -118,7 +118,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         AttendanceSummary(0, 0, 0, 0, 0, 0, 0.0, 0.0)
     )
 
-    // Live Balances per Account (using exact Google Sheets SUMIFS logic)
+    // Live account balances are derived from the local ledger.
     val accountsWithBalance: StateFlow<List<AccountWithBalance>> = combine(
         accounts,
         activeTransactions
@@ -150,7 +150,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
     private val _snackBarMessage = MutableSharedFlow<String>()
     val snackBarMessage: SharedFlow<String> = _snackBarMessage
 
-    // Master Dropdown Lists matching Google Sheets specification
+    // Master dropdown lists used by the app.
     val masterKategoriMasuk = listOf(
         "Penjualan", "Piutang Masuk", "Modal", "Pendapatan Lain", "Transfer Masuk", "Lainnya"
     )
@@ -343,7 +343,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
 
     fun tambahAkun(name: String, type: String, initialBalance: Double, colorHex: String) {
         viewModelScope.launch {
-            val id = "acc_${System.currentTimeMillis()}"
+            val id = repository.generateId("ACC")
             val acc = AccountEntity(id, name, type, initialBalance, colorHex)
             repository.saveAccount(acc)
             _snackBarMessage.emit("Akun $name berhasil ditambahkan.")
