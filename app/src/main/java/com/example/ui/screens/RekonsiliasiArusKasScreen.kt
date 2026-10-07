@@ -167,26 +167,26 @@ fun RekonsiliasiArusKasScreen(
                                     • Net Perubahan Kas: ${formatRupiah(cashFlow.netCashChange)}
                                     • Saldo Akhir Kas: ${formatRupiah(cashFlow.closingBalance)}
                                     ====================================
-                                    _Sistem Kas Terintegrasi_
+                                    _Sistem Kas_
                                 """.trimIndent()
 
                                 "Rekonsiliasi Bank" -> {
                                     val currentAcc = accounts.firstOrNull { it.account.name == reconAccountName }
                                     val currentBookBal = currentAcc?.currentBalance ?: 0.0
-                                    val stAmt = statementBalanceInput.toDoubleOrNull() ?: currentBookBal
-                                    val diff = stAmt - currentBookBal
+                                    val stAmt = statementBalanceInput.toDoubleOrNull()
+                                    val diff = stAmt?.minus(currentBookBal)
                                     """
                                         *BERITA ACARA REKONSILIASI BANK & KAS*
                                         Akun: $reconAccountName
                                         Periode: $reconPeriod
                                         ====================================
                                         • Saldo Buku Kas (Sistem) : ${formatRupiah(currentBookBal)}
-                                        • Saldo Rekening Koran    : ${formatRupiah(stAmt)}
-                                        • Selisih Rekonsiliasi    : ${formatRupiah(diff)}
-                                        • Status                 : ${if (Math.abs(diff) < 1.0) "✅ COCOK (MATCH)" else "⚠️ SELISIH (UNMATCHED)"}
+                                        • Saldo Rekening Koran    : ${stAmt?.let(::formatRupiah) ?: "BELUM DIISI"}
+                                        • Selisih Rekonsiliasi    : ${diff?.let(::formatRupiah) ?: "BELUM DIHITUNG"}
+                                        • Status                 : ${when { diff == null -> "⏳ BELUM DIISI"; Math.abs(diff) < 1.0 -> "✅ COCOK (MATCH)"; else -> "⚠️ SELISIH (UNMATCHED)" }}
                                         • Catatan                : ${reconNotes.ifBlank { "Tidak ada selisih" }}
                                         ====================================
-                                        _Diverifikasi oleh Auditor Keuangan_
+                                        _Dibuat dari data rekonsiliasi yang tersimpan di aplikasi_
                                     """.trimIndent()
                                 }
 
@@ -198,7 +198,7 @@ fun RekonsiliasiArusKasScreen(
                                         "📌 *${b.budget.category}*\n• Pagu: ${formatRupiah(b.budget.budgetAmount)}\n• Realisasi: ${formatRupiah(b.realization)} (${String.format(Locale.getDefault(), "%.1f", b.percentUsed)}%)\n• Sisa: ${formatRupiah(b.remaining)} [${if (b.isOver) "OVER BUDGET" else "AMAN"}]"
                                     }}
                                     ====================================
-                                    _Sistem Kas Terintegrasi_
+                                    _Sistem Kas_
                                 """.trimIndent()
                             }
                             viewModel.kirimPesanWhatsApp(context, waText, targetWaPhone)
@@ -385,23 +385,23 @@ fun RekonsiliasiArusKasScreen(
                                 modifier = Modifier.fillMaxWidth()
                             )
 
-                            val statementBal = statementBalanceInput.toDoubleOrNull() ?: currentBookBal
-                            val diff = statementBal - currentBookBal
-                            val isMatched = Math.abs(diff) < 1.0
+                            val statementBal = statementBalanceInput.toDoubleOrNull()
+                            val diff = statementBal?.minus(currentBookBal)
+                            val isMatched = diff != null && Math.abs(diff) < 1.0
 
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(text = "Selisih: ${formatRupiah(diff)}", fontWeight = FontWeight.Bold, color = if (isMatched) IncomeGreen else ExpenseRed)
+                                Text(text = "Selisih: ${diff?.let(::formatRupiah) ?: "BELUM DIISI"}", fontWeight = FontWeight.Bold, color = if (isMatched) IncomeGreen else ExpenseRed)
                                 Box(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(8.dp))
                                         .background(if (isMatched) Color(0xFFDCFCE7) else Color(0xFFFEE2E2))
                                         .padding(horizontal = 8.dp, vertical = 4.dp)
                                 ) {
-                                    Text(text = if (isMatched) "STATUS: COCOK (MATCH)" else "STATUS: SELISIH", fontWeight = FontWeight.Bold, color = if (isMatched) IncomeGreen else ExpenseRed, fontSize = 11.sp)
+                                    Text(text = when { statementBal == null -> "STATUS: BELUM DIISI"; isMatched -> "STATUS: COCOK (MATCH)"; else -> "STATUS: SELISIH" }, fontWeight = FontWeight.Bold, color = if (isMatched) IncomeGreen else ExpenseRed, fontSize = 11.sp)
                                 }
                             }
 
