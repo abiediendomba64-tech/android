@@ -369,7 +369,7 @@ class KasRepository(
         require(receivable.paidAmount.isFinite() && receivable.paidAmount >= 0.0 && receivable.paidAmount <= receivable.totalAmount) { "Nominal pembayaran tagihan tidak valid." }
         requireIsoDate(receivable.dueDate, "Tanggal jatuh tempo")
         require(receivable.status in setOf("Belum Jatuh Tempo", "Jatuh Tempo", "Lunas")) { "Status tagihan tidak valid." }
-        require(accountDao.getAccountByName(receivable.targetAccount)?.isActive == true" { "Akun terkait tidak terdaftar atau nonaktif." }
+        require(accountDao.getAccountByName(receivable.targetAccount)?.isActive == true) { "Akun terkait tidak terdaftar atau nonaktif." }
         val normalizedStatus = if (receivable.paidAmount >= receivable.totalAmount) "Lunas" else receivable.status
         receivableDao.insertReceivable(receivable.copy(status = normalizedStatus))
     }
