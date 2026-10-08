@@ -1048,90 +1048,311 @@ class KasRepository(
         }
     }
 
+
+    private val transactionSpreadsheetHeaders = listOf(
+        "ID", "Tipe", "Tanggal", "Jam", "Akun", "Ke Akun", "Nama Transaksi",
+        "Kategori", "Keterangan", "Nominal", "Alokasi", "PIC", "Bukti", "No Bukti",
+        "Proyek", "Catatan", "Status", "Waktu Input", "Input Oleh", "Diarsipkan",
+        "Waktu Arsip", "Diarsipkan Oleh"
+    )
+
     fun exportTransactionsToCsv(transactions: List<TransactionEntity>): String {
-        val sb = StringBuilder()
-        sb.append("ID,Tipe,Tanggal,Jam,Akun,Ke Akun,Nama Transaksi,Kategori,Keterangan,Nominal,Alokasi,PIC,Bukti,No Bukti,Status\n")
-        transactions.forEach { tx ->
-            val cleanDesc = tx.description.replace(",", ";").replace("\n", " ")
-            val cleanName = tx.name.replace(",", ";")
-            sb.append("${tx.id},${tx.type},${tx.date},${tx.time},${tx.account},${tx.toAccount ?: ""},$cleanName,${tx.category},$cleanDesc,${tx.amount.toLong()},${tx.allocation},${tx.pic},${tx.proofUrl},${tx.receiptNo},${tx.status}\n")
+        val ordered = transactions.sortedWith(
+            compareByDescending<TransactionEntity> { it.date }
+                .thenByDescending { it.time }
+                .thenByDescending { it.inputTime }
+        )
+        val sb = StringBuilder("\uFEFF")
+        sb.append(transactionSpreadsheetHeaders.joinToString(separator = ",", transform = ::escapeCsvCell))
+            .append('\n')
+
+        ordered.forEach { tx ->
+            val row = listOf(
+                tx.id, tx.type, tx.date, tx.time, tx.account, tx.toAccount.orEmpty(),
+                tx.name, tx.category, tx.description, tx.amount.toString(), tx.allocation,
+                tx.pic, tx.proofUrl, tx.receiptNo, tx.project, tx.note, tx.status,
+                formatSpreadsheetTimestamp(tx.inputTime), tx.inputBy,
+                if (tx.isArchived) "YA" else "TIDAK",
+                tx.archivedAt?.let(::formatSpreadsheetTimestamp).orEmpty(),
+                tx.archivedBy.orEmpty()
+            )
+            row.forEachIndexed { index, value ->
+                if (index > 0) sb.append(',')
+                sb.append(escapeCsvCell(value))
+            }
+            sb.append('\n')
         }
         return sb.toString()
     }
 
     suspend fun importTransactionsFromCsv(csvContent: String): Result<Int> {
         return try {
-            val lines = csvContent.lines().filter { it.isNotBlank() }
-            if (lines.size <= 1) return Result.success(0)
+            require(csvContent.isNotBlank()) { "File spreadsheet kosong." }
 
-            val dataRows = lines.drop(1)
+            val delimiter = detectCsvDelimiter(csvContent)
+            val records = parseCsvRecords(csvContent, delimiter)
+                .map { cells -> cells.map { it.trim() } }
+                .filter { row -> row.any { it.isNotBlank() } }
+
+            if (records.size < 2) return Result.success(0)
+
+            val headerMap = records.first().mapIndexed { index, rawHeader ->
+                normalizeSpreadsheetHeader(rawHeader) to index
+            }.filter { (header, _) -> header.isNotBlank() }.toMap()
+
+            fun findColumn(vararg names: String): Int? =
+                names.firstNotNullOfOrNull { headerMap[normalizeSpreadsheetHeader(it)] }
+
+            val required = mapOf(
+                "ID" to findColumn("ID"),
+                "Tipe" to findColumn("Tipe", "Type"),
+                "Tanggal" to findColumn("Tanggal", "Date"),
+                "Jam" to findColumn("Jam", "Time"),
+                "Akun" to findColumn("Akun", "Account"),
+                "Nama Transaksi" to findColumn("Nama Transaksi", "Nama", "Transaction Name"),
+                "Kategori" to findColumn("Kategori", "Category"),
+                "Nominal" to findColumn("Nominal", "Amount"),
+                "Status" to findColumn("Status")
+            )
+            val missingHeaders = required.filterValues { it == null }.keys
+            require(missingHeaders.isEmpty()) {
+                "Kolom wajib spreadsheet tidak lengkap: " + missingHeaders.joinToString(", ") + "."
+            }
+
+            val existingIds = (
+                transactionDao.getAllActiveTransactions().first() +
+                    transactionDao.getArchivedTransactions().first()
+                ).map { it.id }.toSet()
             val txList = mutableListOf<TransactionEntity>()
+            val seenIds = mutableSetOf<String>()
             val errors = mutableListOf<String>()
 
-            dataRows.forEachIndexed { index, row ->
+            fun cell(row: List<String>, vararg names: String): String {
+                val index = findColumn(*names) ?: return ""
+                return row.getOrNull(index).orEmpty()
+            }
+
+            records.drop(1).forEachIndexed { index, row ->
                 val rowNumber = index + 2
-                val cols = row.split(',').map { it.trim() }
-                if (cols.size < 10) {
-                    errors += "Baris $rowNumber: jumlah kolom kurang dari 10."
-                    return@forEachIndexed
-                }
-
-                val id = cols.getOrNull(0)?.takeIf { it.isNotBlank() } ?: generateId("TX")
-                val type = cols.getOrNull(1)?.uppercase().orEmpty()
-                val date = cols.getOrNull(2).orEmpty()
-                val time = cols.getOrNull(3).orEmpty().ifBlank { "00:00:00" }
-                val account = cols.getOrNull(4).orEmpty()
-                val toAccount = cols.getOrNull(5)?.takeIf { it.isNotBlank() }
-                val name = cols.getOrNull(6).orEmpty()
-                val category = cols.getOrNull(7).orEmpty()
-                val desc = cols.getOrNull(8).orEmpty()
-                val amount = cols.getOrNull(9)?.toDoubleOrNull() ?: Double.NaN
-                val alloc = cols.getOrNull(10).orEmpty().ifBlank { "Operasional" }
-                val pic = cols.getOrNull(11).orEmpty()
-                val proof = cols.getOrNull(12).orEmpty()
-                val receiptNo = cols.getOrNull(13).orEmpty()
-                val status = cols.getOrNull(14).orEmpty()
-
                 try {
+                    require(row.size == records.first().size) {
+                        "jumlah kolom tidak sama dengan header (" + row.size + "/" + records.first().size + ")"
+                    }
+
+                    val id = cell(row, "ID").trim()
+                    require(id.isNotBlank()) { "ID wajib diisi; jangan gunakan baris tanpa identitas transaksi." }
+                    require(id !in existingIds) {
+                        "ID " + id + " sudah ada di database; import dibatalkan agar tidak menimpa data."
+                    }
+                    require(seenIds.add(id)) { "ID " + id + " muncul lebih dari sekali dalam file." }
+
+                    val type = cell(row, "Tipe", "Type").uppercase(Locale.getDefault())
+                    val date = cell(row, "Tanggal", "Date")
+                    val time = cell(row, "Jam", "Time")
+                    val account = cell(row, "Akun", "Account")
+                    val toAccount = cell(row, "Ke Akun", "Akun Tujuan", "To Account").takeIf { it.isNotBlank() }
+                    val name = cell(row, "Nama Transaksi", "Nama", "Transaction Name")
+                    val category = cell(row, "Kategori", "Category")
+                    val description = cell(row, "Keterangan", "Description")
+                    val amount = parseSpreadsheetAmount(cell(row, "Nominal", "Amount"))
+                    val allocation = cell(row, "Alokasi", "Allocation")
+                    val pic = cell(row, "PIC")
+                    val proofUrl = cell(row, "Bukti", "Proof")
+                    val receiptNo = cell(row, "No Bukti", "Receipt No")
+                    val project = cell(row, "Proyek", "Project")
+                    val note = cell(row, "Catatan", "Note")
+                    val status = cell(row, "Status")
+                    val inputTimeRaw = cell(row, "Waktu Input", "Input Time")
+                    val inputTime = if (inputTimeRaw.isBlank()) System.currentTimeMillis() else parseSpreadsheetTimestamp(inputTimeRaw)
+                    val inputBy = cell(row, "Input Oleh", "Input By").ifBlank { "Spreadsheet Import" }
+                    val isArchived = parseSpreadsheetBoolean(cell(row, "Diarsipkan", "Archived"))
+                    val archivedAtRaw = cell(row, "Waktu Arsip", "Archived At")
+                    val archivedAt = archivedAtRaw.takeIf { it.isNotBlank() }?.let(::parseSpreadsheetTimestamp)
+                    val archivedBy = cell(row, "Diarsipkan Oleh", "Archived By").takeIf { it.isNotBlank() }
+
                     require(type in setOf("MASUK", "KELUAR", "TRANSFER")) { "tipe transaksi tidak valid" }
                     require(date.matches(Regex("""\d{4}-\d{2}-\d{2}"""))) { "tanggal harus YYYY-MM-DD" }
+                    require(time.matches(Regex("""\d{2}:\d{2}:\d{2}"""))) { "jam harus HH:mm:ss" }
                     require(name.isNotBlank()) { "nama transaksi wajib diisi" }
                     require(category.isNotBlank()) { "kategori wajib diisi" }
                     require(status in setOf("Selesai", "Draft", "Pending", "Batal", "Dihapus")) { "status tidak valid" }
+                    require(inputTime > 0L) { "Waktu input tidak valid" }
+                    require(archivedAt == null || archivedAt > 0L) { "Waktu arsip tidak valid" }
+
+                    if (!isArchived) {
+                        require(archivedAt == null) { "Transaksi aktif tidak boleh memiliki waktu arsip." }
+                        require(archivedBy == null) { "Transaksi aktif tidak boleh memiliki pengarsip." }
+                    } else if (archivedAt != null) {
+                        require(archivedBy != null) { "Transaksi arsip harus memiliki pengarsip." }
+                    }
+
                     val tx = TransactionEntity(
-                        id = id,
-                        type = type,
-                        date = date,
-                        time = time,
-                        account = account,
-                        toAccount = toAccount,
-                        name = name,
-                        category = category,
-                        description = desc,
-                        amount = amount,
-                        allocation = alloc,
-                        pic = pic,
-                        proofUrl = proof,
-                        receiptNo = receiptNo,
-                        status = status,
-                        inputTime = System.currentTimeMillis(),
-                        inputBy = "CSV Importer"
+                        id=id, type=type, date=date, time=time, account=account, toAccount=toAccount,
+                        name=name, category=category, description=description, amount=amount,
+                        allocation=allocation, pic=pic, proofUrl=proofUrl, receiptNo=receiptNo,
+                        project=project, note=note, status=status, inputTime=inputTime, inputBy=inputBy,
+                        isArchived=isArchived, archivedAt=archivedAt, archivedBy=archivedBy
                     )
                     validateTransaction(tx)
                     txList += tx
-                } catch (e: IllegalArgumentException) {
-                    errors += "Baris $rowNumber: ${e.message ?: "data tidak valid"}"
+                } catch (ex: Exception) {
+                    errors += "Baris " + rowNumber + ": " + (ex.message ?: "data tidak valid")
                 }
             }
 
             if (errors.isNotEmpty()) {
-                return Result.failure(IllegalArgumentException(errors.take(20).joinToString("; ")))
+                return Result.failure(
+                    IllegalArgumentException(
+                        errors.take(20).joinToString("; ") +
+                            if (errors.size > 20) " (dan " + (errors.size - 20) + " error lain)." else ""
+                    )
+                )
             }
+
             if (txList.isNotEmpty()) transactionDao.insertTransactions(txList)
             Result.success(txList.size)
-        } catch (e: Exception) {
-            Result.failure(e)
+        } catch (ex: Exception) {
+            Result.failure(ex)
         }
+    }
+
+    private fun escapeCsvCell(value: String): String {
+        val normalized = value.replace("\r\n", "\n").replace('\r', '\n')
+        return if (normalized.any { it == ',' || it == ';' || it == '\t' || it == '\n' || it == '"' }) {
+            "\"" + normalized.replace("\"", "\"\"") + "\""
+        } else {
+            normalized
+        }
+    }
+
+    private fun normalizeSpreadsheetHeader(value: String): String =
+        value.removePrefix("\uFEFF").trim().replace(Regex("""\s+"""), " ").lowercase(Locale.getDefault())
+
+    private fun detectCsvDelimiter(content: String): Char {
+        val headerEnd = content.indexOfFirst { it == '\n' || it == '\r' }
+            .let { if (it >= 0) it else content.length }
+        val header = content.substring(0, headerEnd)
+        return charArrayOf(',', ';', '\t').maxByOrNull { delimiter ->
+            var inQuotes = false
+            var count = 0
+            var index = 0
+            while (index < header.length) {
+                val char = header[index]
+                if (char == '"') {
+                    if (inQuotes && index + 1 < header.length && header[index + 1] == '"') index++
+                    else inQuotes = !inQuotes
+                } else if (!inQuotes && char == delimiter) {
+                    count++
+                }
+                index++
+            }
+            count
+        } ?: ','
+    }
+
+    private fun parseCsvRecords(content: String, delimiter: Char): List<List<String>> {
+        val records = mutableListOf<List<String>>()
+        var row = mutableListOf<String>()
+        var field = StringBuilder()
+        var inQuotes = false
+        var index = 0
+
+        while (index < content.length) {
+            val char = content[index]
+            if (inQuotes) {
+                when {
+                    char == '"' && index + 1 < content.length && content[index + 1] == '"' -> {
+                        field.append('"')
+                        index++
+                    }
+                    char == '"' -> inQuotes = false
+                    else -> field.append(char)
+                }
+            } else {
+                when (char) {
+                    '"' -> inQuotes = true
+                    delimiter -> {
+                        row.add(field.toString())
+                        field = StringBuilder()
+                    }
+                    '\r' -> {
+                        row.add(field.toString())
+                        field = StringBuilder()
+                        if (index + 1 < content.length && content[index + 1] == '\n') index++
+                        if (row.any { it.isNotEmpty() }) records.add(row)
+                        row = mutableListOf()
+                    }
+                    '\n' -> {
+                        row.add(field.toString())
+                        field = StringBuilder()
+                        if (row.any { it.isNotEmpty() }) records.add(row)
+                        row = mutableListOf()
+                    }
+                    else -> field.append(char)
+                }
+            }
+            index++
+        }
+
+        require(!inQuotes) { "Format CSV tidak valid: tanda kutip tidak tertutup." }
+        if (field.isNotEmpty() || row.isNotEmpty()) {
+            row.add(field.toString())
+            if (row.any { it.isNotEmpty() }) records.add(row)
+        }
+        return records
+    }
+
+    private fun parseSpreadsheetAmount(raw: String): Double {
+        val value = raw.trim()
+            .removePrefix("+")
+            .replace(Regex("""(?i)rp"""), "")
+            .replace(" ", "")
+        require(value.isNotBlank()) { "nominal wajib diisi" }
+
+        val normalized = when {
+            value.contains('.') && value.contains(',') -> {
+                if (value.lastIndexOf(',') > value.lastIndexOf('.')) {
+                    value.replace(".", "").replace(',', '.')
+                } else {
+                    value.replace(",", "")
+                }
+            }
+            value.count { it == ',' } == 1 -> {
+                val parts = value.split(',')
+                if (parts[1].length in 1..2) parts[0] + "." + parts[1] else parts.joinToString("")
+            }
+            value.count { it == '.' } == 1 -> {
+                val parts = value.split('.')
+                if (parts[1].length in 1..2) value else parts.joinToString("")
+            }
+            else -> value.replace(",", "").replace(".", "")
+        }
+
+        return normalized.toDoubleOrNull()
+            ?.also { require(it.isFinite()) { "nominal tidak valid" } }
+            ?: throw IllegalArgumentException("nominal tidak dapat dibaca: " + raw)
+    }
+
+    private fun parseSpreadsheetBoolean(raw: String): Boolean =
+        when (raw.trim().lowercase(Locale.getDefault())) {
+            "", "0", "false", "no", "tidak", "n" -> false
+            "1", "true", "yes", "ya", "y" -> true
+            else -> throw IllegalArgumentException("nilai boolean tidak valid: " + raw)
+        }
+
+    private fun formatSpreadsheetTimestamp(timestamp: Long): String =
+        SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.getDefault()).format(Date(timestamp))
+
+    private fun parseSpreadsheetTimestamp(raw: String): Long {
+        raw.toLongOrNull()?.let {
+            require(it > 0L) { "timestamp harus lebih besar dari 0" }
+            return it
+        }
+        val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.getDefault()).apply {
+            isLenient = false
+        }
+        return formatter.parse(raw)?.time
+            ?: throw IllegalArgumentException("timestamp tidak valid: " + raw)
     }
     fun generatePrintableSummaryText(
         companyName: String,
