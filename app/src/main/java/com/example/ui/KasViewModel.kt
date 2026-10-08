@@ -22,6 +22,7 @@ import com.example.data.repository.BudgetRealization
 import com.example.data.repository.CashFlowStatement
 import com.example.data.repository.DashboardKpis
 import com.example.data.repository.KasRepository
+import com.example.data.repository.PayrollCalculation
 import com.example.ui.components.formatRupiah
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -42,6 +43,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
     init {
         val database = AppDatabase.getDatabase(application)
         repository = KasRepository(
+            database = database,
             transactionDao = database.transactionDao(),
             accountDao = database.accountDao(),
             budgetDao = database.budgetDao(),
@@ -119,9 +121,12 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
     )
 
     // Live account balances are derived from the local ledger.
+    val ledgerTransactions: StateFlow<List<TransactionEntity>> = repository.ledgerTransactions
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     val accountsWithBalance: StateFlow<List<AccountWithBalance>> = combine(
         accounts,
-        activeTransactions
+        ledgerTransactions
     ) { accList, txList ->
         repository.calculateAccountBalances(accList, txList)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -129,7 +134,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
     // Dashboard KPIs (Total Saldo, Masuk/Keluar Hari Ini, Net, Bulan Ini)
     val dashboardKpis: StateFlow<DashboardKpis> = combine(
         accountsWithBalance,
-        activeTransactions
+        ledgerTransactions
     ) { accBalances, txList ->
         repository.calculateDashboardKpis(accBalances, txList)
     }.stateIn(
@@ -141,7 +146,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
     // Budget Realizations (% used, remaining, OVER alert)
     val budgetRealizations: StateFlow<List<BudgetRealization>> = combine(
         budgets,
-        activeTransactions
+        ledgerTransactions
     ) { bList, txList ->
         repository.calculateBudgetRealizations(bList, txList)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -529,7 +534,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val result = repository.runIntegrityAudit(
                 accounts = accounts.value,
-                transactions = activeTransactions.value,
+                transactions = ledgerTransactions.value,
                 budgets = budgets.value,
                 receivables = receivables.value,
                 employees = employees.value,
@@ -542,7 +547,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
                 appendLine("Waktu Pemeriksaan: ${result.checkedAt}")
                 appendLine("Status: ${if (result.passed) "LULUS" else "GAGAL"}")
                 appendLine("Total saldo ledger: ${formatRupiah(totalSaldo)}")
-                appendLine("Transaksi aktif: ${activeTransactions.value.size}")
+                appendLine("Transaksi ledger: ${ledgerTransactions.value.size}")
                 if (result.issues.isEmpty()) {
                     appendLine("Tidak ditemukan ketidaksesuaian data pada pemeriksaan ini.")
                 } else {
@@ -557,7 +562,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
                     dateFormatted = result.checkedAt,
                     action = if (result.passed) "SYSTEM_AUDIT_PASS" else "SYSTEM_AUDIT_FAIL",
                     recordId = "AUDIT-" + System.currentTimeMillis().toString().takeLast(8),
-                    details = "Pemeriksaan integritas: ${result.issues.size} temuan; ${activeTransactions.value.size} transaksi aktif; saldo ${formatRupiah(totalSaldo)}.",
+                    details = "Pemeriksaan integritas: ${result.issues.size} temuan; ${ledgerTransactions.value.size} transaksi ledger; saldo ${formatRupiah(totalSaldo)}.",
                     user = "Sistem Audit",
                     verifiedFormulaStatus = if (result.passed) "AUDIT_PASS" else "AUDIT_FAIL",
                     balanceAfter = totalSaldo
@@ -570,6 +575,12 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
             onComplete(report)
         }
     }
+    fun hitungPayrollKaryawan(employee: EmployeeEntity, attendances: List<AttendanceEntity>): PayrollCalculation =
+        repository.calculatePayrollForEmployee(employee, attendances)
+
+    fun hitungTotalPayroll(employees: List<EmployeeEntity>, attendances: List<AttendanceEntity>): Double =
+        repository.calculatePayrollTotal(employees, attendances)
+
     fun cairkanGajiAbsensiKeKasKeluar(
         period: String,
         totalGaji: Double,
@@ -577,32 +588,23 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         onSuccess: () -> Unit
     ) {
         viewModelScope.launch {
-            val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
-            val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-            val today = dateFormat.format(Date())
-            val id = repository.generateId("KK")
-            val tx = TransactionEntity(
-                id = id,
-                type = "KELUAR",
-                date = today,
-                time = timeFormat.format(Date()),
-                account = accountName,
-                name = "Pembayaran Gaji & Tunjangan Karyawan ($period)",
-                category = "Gaji",
-                description = "Pencairan gaji berdasarkan rekap absensi karyawan periode $period",
-                amount = totalGaji,
-                allocation = "Gaji",
-                pic = "Bendahara",
-                receiptNo = "PAYROLL-$period",
-                status = "Selesai"
-            )
-            repository.saveTransaction(tx)
-            _snackBarMessage.emit("Gaji sebesar ${formatRupiah(totalGaji)} berhasil dicairkan ke Kas Keluar.")
+            val payrollTotal = repository.calculatePayrollTotal(employees.value, filteredAttendances.value)
+            require(totalGaji.isFinite() && totalGaji > 0.0) { "Total payroll harus lebih besar dari Rp 0." }
+            require(kotlin.math.abs(payrollTotal - totalGaji) < 0.01) {
+                "Total pencairan payroll tidak sama dengan perhitungan slip; pencairan dibatalkan."
+            }
+            repository.savePayrollDisbursement(period, payrollTotal, accountName)
+            _snackBarMessage.emit("Payroll sebesar ${formatRupiah(payrollTotal)} berhasil dicairkan ke Kas Keluar.")
             onSuccess()
         }
     }
 
     // Bank Reconciliation Operations
+    fun hitungSaldoBukuRekonsiliasi(accountName: String, period: String): Double {
+        val account = accounts.value.firstOrNull { it.name.equals(accountName, ignoreCase = true) } ?: return 0.0
+        return repository.calculateAccountBalanceAtPeriod(account, period, ledgerTransactions.value)
+    }
+
     fun simpanRekonsiliasiBank(
         accountName: String,
         period: String,
@@ -610,23 +612,21 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         notes: String
     ) {
         viewModelScope.launch {
-            val currentAcc = accountsWithBalance.value.firstOrNull { it.account.name == accountName }
-            val bookBal = currentAcc?.currentBalance ?: 0.0
-            val diff = statementBalance - bookBal
-            val status = if (Math.abs(diff) < 1.0) "Cocok" else "Selisih"
-
-            val id = "REC-${accountName.replace(" ", "_")}-$period"
+            val id = "REC-${accountName.replace(" ", "_")}-${period}"
             val recon = BankReconEntity(
                 id = id,
                 accountName = accountName,
                 period = period,
-                bookBalance = bookBal,
+                bookBalance = 0.0,
                 statementBalance = statementBalance,
-                difference = diff,
-                status = status,
+                difference = 0.0,
+                status = "Belum Diverifikasi",
                 notes = notes
             )
             repository.saveBankReconciliation(recon)
+            val saved = bankReconciliations.value.firstOrNull { it.id == id }
+            val status = saved?.status ?: "Tersimpan"
+            val diff = saved?.difference ?: 0.0
             _snackBarMessage.emit("Rekonsiliasi $accountName periode $period disimpan ($status - Selisih: ${formatRupiah(diff)}).")
         }
     }
@@ -687,7 +687,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         return repository.generatePrintableSummaryText(
             companyName = companyName.value,
             accounts = accountsWithBalance.value,
-            transactions = activeTransactions.value
+            transactions = ledgerTransactions.value
         )
     }
 
