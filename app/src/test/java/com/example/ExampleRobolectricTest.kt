@@ -39,6 +39,7 @@ class ExampleRobolectricTest {
             .allowMainThreadQueries()
             .build()
         repository = KasRepository(
+            database = db,
             transactionDao = db.transactionDao(),
             accountDao = db.accountDao(),
             budgetDao = db.budgetDao(),
@@ -329,4 +330,117 @@ class ExampleRobolectricTest {
         assertTrue(duplicate.exceptionOrNull()?.message?.contains("sudah ada") == true)
     }
 
+
+    @Test
+    fun periodAndAccountIdentityRulesAreEnforced() = runBlocking {
+        repository.saveBudget(BudgetEntity(period = "2026-10", category = "Operasional", budgetAmount = 1000000.0))
+        db.accountDao().insertAccount(AccountEntity("acc-1", "Kas Tunai", "Kas", 0.0))
+        try {
+            repository.saveAccount(AccountEntity("acc-2", "kas tunai", "Kas", 0.0))
+            throw AssertionError("Nama akun yang sama tanpa memperhatikan huruf besar/kecil harus ditolak.")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message?.contains("sudah digunakan") == true)
+        }
+        repository.saveBankReconciliation(
+            BankReconEntity("REC-TEST-2026-10", "Kas Tunai", "2026-10", 0.0, 0.0, 0.0, "Belum Diverifikasi")
+        )
+        assertEquals("2026-10", db.bankReconDao().getAllReconciliations().first().first().period)
+    }
+
+    @Test
+    fun updateTransactionRejectsInvalidReplacementAndKeepsOriginal() = runBlocking {
+        db.accountDao().insertAccount(AccountEntity("acc-1", "Kas Tunai", "Kas", 0.0))
+        val original = TransactionEntity("TX-UPD-001", "KELUAR", "2026-10-01", "10:00:00", "Kas Tunai", null, "Original", "Operasional", "", 100000.0, status = "Selesai")
+        db.transactionDao().insertTransaction(original)
+        val invalid = original.copy(amount = -1.0)
+        try {
+            repository.updateTransaction(invalid, original)
+            throw AssertionError("Edit transaksi dengan nominal invalid harus ditolak.")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message?.contains("lebih besar") == true)
+        }
+        assertEquals(100000.0, db.transactionDao().getTransactionById(original.id)?.amount ?: 0.0, 0.01)
+    }
+
+    @Test
+    fun concurrentReceivablePaymentsAreAtomicAndCannotDoublePay() = runBlocking {
+        db.accountDao().insertAccount(AccountEntity("acc-1", "Kas Tunai", "Kas", 0.0))
+        db.receivableDao().insertReceivable(
+            com.example.data.model.ReceivableEntity(
+                id = "PT-ATOMIC-001", date = "2026-10-07", customerName = "Pelanggan Atomic",
+                description = "Tagihan", totalAmount = 300000.0, dueDate = "2026-10-31", targetAccount = "Kas Tunai"
+            )
+        )
+        val results = kotlinx.coroutines.coroutineScope {
+            val first = kotlinx.coroutines.async { runCatching { repository.payReceivable("PT-ATOMIC-001", 200000.0, "Kas Tunai") } }
+            val second = kotlinx.coroutines.async { runCatching { repository.payReceivable("PT-ATOMIC-001", 200000.0, "Kas Tunai") } }
+            listOf(first.await(), second.await())
+        }
+        assertEquals(1, results.count { it.isSuccess })
+        assertEquals(1, results.count { it.isFailure })
+        assertEquals(200000.0, db.receivableDao().getReceivableById("PT-ATOMIC-001")?.paidAmount ?: 0.0, 0.01)
+        assertEquals(1, db.transactionDao().getAllActiveTransactions().first().size)
+    }
+
+    @Test
+    fun historicalBankBalanceUsesReconciliationPeriodNotCurrentBalance() = runBlocking {
+        db.accountDao().insertAccount(AccountEntity("acc-1", "Bank BCA", "Bank", 1000000.0))
+        db.transactionDao().insertTransactions(listOf(
+            TransactionEntity("TX-SEP", "MASUK", "2026-09-15", "10:00:00", "Bank BCA", null, "September", "Penjualan", "", 100000.0, status = "Selesai"),
+            TransactionEntity("TX-OCT", "MASUK", "2026-10-05", "10:00:00", "Bank BCA", null, "October", "Penjualan", "", 500000.0, status = "Selesai")
+        ))
+        repository.saveBankReconciliation(
+            BankReconEntity("REC-BCA-2026-09", "Bank BCA", "2026-09", 0.0, 1100000.0, 0.0, "Belum Diverifikasi")
+        )
+        val recon = db.bankReconDao().getAllReconciliations().first().single()
+        assertEquals(1100000.0, recon.bookBalance, 0.01)
+        assertEquals(0.0, recon.difference, 0.01)
+        assertEquals("Cocok", recon.status)
+    }
+
+    @Test
+    fun payrollTotalMatchesSlipCalculationAndLedgerDisbursement() = runBlocking {
+        val emp = EmployeeEntity("EMP-PAY-001", "Ahmad", "Staff", "Operasional", "", 100000.0, 3000000.0)
+        db.employeeDao().insertEmployee(emp)
+        val attendances = listOf(
+            AttendanceEntity("ATT-PAY-01", emp.id, emp.name, emp.department, "2026-10-01", "08:00", "17:00", "Hadir", 2.0, 100000.0),
+            AttendanceEntity("ATT-PAY-02", emp.id, emp.name, emp.department, "2026-10-02", "08:00", "17:00", "Alpa", 0.0, 0.0)
+        )
+        db.attendanceDao().insertAttendances(attendances)
+        val payroll = repository.calculatePayrollForEmployee(emp, attendances)
+        val total = repository.calculatePayrollTotal(listOf(emp), attendances)
+        assertEquals(3000000.0, payroll.baseSalary, 0.01)
+        assertEquals(100000.0, payroll.attendanceAllowance, 0.01)
+        assertEquals(37500.0, payroll.overtimePay, 0.01)
+        assertEquals(100000.0, payroll.absenceDeduction, 0.01)
+        assertEquals(3037500.0, payroll.net, 0.01)
+        assertEquals(payroll.net, total, 0.01)
+
+        db.accountDao().insertAccount(AccountEntity("acc-pay", "Kas Tunai", "Kas", 5000000.0))
+        repository.savePayrollDisbursement("2026-10", total, "Kas Tunai")
+        val payrollTx = db.transactionDao().getAllActiveTransactions().first().single()
+        assertEquals(total, payrollTx.amount, 0.01)
+        assertEquals("PAYROLL-2026-10", payrollTx.receiptNo)
+        try {
+            repository.savePayrollDisbursement("2026-10", total, "Kas Tunai")
+            throw AssertionError("Payroll periode yang sama tidak boleh dicairkan dua kali.")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message?.contains("sudah dicairkan") == true)
+        }
+    }
+
+    @Test
+    fun archivedTransactionStillContributesToLedgerBalance() = runBlocking {
+        db.accountDao().insertAccount(AccountEntity("acc-1", "Kas Tunai", "Kas", 0.0))
+        val tx = TransactionEntity("TX-ARCH-001", "MASUK", "2026-10-01", "10:00:00", "Kas Tunai", null, "Archived", "Penjualan", "", 500000.0, status = "Selesai")
+        db.transactionDao().insertTransaction(tx)
+        repository.archiveTransaction(tx.id)
+        val active = db.transactionDao().getAllActiveTransactions().first()
+        val archived = db.transactionDao().getArchivedTransactions().first()
+        val balance = repository.calculateAccountBalances(
+            listOf(AccountEntity("acc-1", "Kas Tunai", "Kas", 0.0)),
+            active + archived
+        ).single().currentBalance
+        assertEquals(500000.0, balance, 0.01)
+    }
 }
