@@ -28,6 +28,9 @@ interface AttendanceDao {
     @Query("SELECT * FROM attendances WHERE employeeId = :empId AND date = :date LIMIT 1")
     suspend fun getAttendanceByEmployeeAndDate(empId: String, date: String): AttendanceEntity?
 
+    @Query("SELECT COUNT(*) FROM attendances WHERE employeeId = :employeeId")
+    suspend fun countReferencesToEmployee(employeeId: String): Int
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAttendance(attendance: AttendanceEntity)
 
