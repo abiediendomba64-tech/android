@@ -172,7 +172,7 @@ fun RekonsiliasiArusKasScreen(
 
                                 "Rekonsiliasi Bank" -> {
                                     val currentAcc = accounts.firstOrNull { it.account.name == reconAccountName }
-                                    val currentBookBal = currentAcc?.currentBalance ?: 0.0
+                                    val currentBookBal = viewModel.hitungSaldoBukuRekonsiliasi(reconAccountName, reconPeriod)
                                     val stAmt = statementBalanceInput.toDoubleOrNull()
                                     val diff = stAmt?.minus(currentBookBal)
                                     """
@@ -366,7 +366,7 @@ fun RekonsiliasiArusKasScreen(
                                 onValueChange = { reconAccountName = it }
                             )
 
-                            val currentBookBal = accounts.firstOrNull { it.account.name == reconAccountName }?.currentBalance ?: 0.0
+                            val currentBookBal = viewModel.hitungSaldoBukuRekonsiliasi(reconAccountName, reconPeriod)
 
                             DetailRow("Saldo Buku Kas (Sistem)", formatRupiah(currentBookBal))
 
