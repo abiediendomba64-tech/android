@@ -101,6 +101,47 @@ fun BackupRestoreScreen(
         }
     }
 
+    val createSpreadsheetLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/csv")
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                try {
+                    val csv = viewModel.exportCsv()
+                    context.contentResolver.openOutputStream(uri)?.use { output ->
+                        output.write(csv.toByteArray(Charsets.UTF_8))
+                    } ?: throw IllegalStateException("Lokasi file spreadsheet tidak dapat dibuka.")
+                    operationMessage = "Export spreadsheet berhasil."
+                } catch (e: Exception) {
+                    operationMessage = "Export spreadsheet gagal: " + (e.message ?: "kesalahan tidak diketahui")
+                }
+            }
+        }
+    }
+
+    val importSpreadsheetLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                try {
+                    val csv = context.contentResolver.openInputStream(uri)?.use { input ->
+                        input.readBytes().toString(Charsets.UTF_8)
+                    } ?: throw IllegalStateException("File spreadsheet tidak dapat dibaca.")
+                    val result = viewModel.importCsv(csv)
+                    operationMessage = if (result.isSuccess) {
+                        "Import spreadsheet berhasil: " + (result.getOrNull() ?: 0) + " transaksi ditambahkan."
+                    } else {
+                        "Import spreadsheet gagal: " + (result.exceptionOrNull()?.message ?: "data tidak valid")
+                    }
+                } catch (e: Exception) {
+                    operationMessage = "Import spreadsheet gagal: " + (e.message ?: "kesalahan tidak diketahui")
+                }
+            }
+        }
+    }
+
+
     LazyColumn(
         modifier = modifier.fillMaxSize().testTag("backup_restore_screen"),
         contentPadding = PaddingValues(16.dp),
@@ -186,6 +227,53 @@ fun BackupRestoreScreen(
                             color = PrimaryBlue,
                             fontWeight = FontWeight.SemiBold
                         )
+                    }
+                }
+            }
+        }
+
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text("Spreadsheet Transaksi", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text(
+                        "CSV UTF-8 kompatibel dengan Excel dan Google Sheets. Kolom transaksi lengkap dipertahankan dan import menolak ID ganda atau akun yang tidak terdaftar.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Button(
+                        onClick = {
+                            val filename = "sistem-kas-transaksi-" + SimpleDateFormat("yyyyMMdd-HHmmss", Locale.getDefault()).format(Date()) + ".csv"
+                            createSpreadsheetLauncher.launch(filename)
+                        },
+                        modifier = Modifier.fillMaxWidth().testTag("spreadsheet_export"),
+                        colors = ButtonDefaults.buttonColors(containerColor = IncomeGreen),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.size(8.dp))
+                        Text("Export Spreadsheet CSV", fontWeight = FontWeight.Bold)
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            importSpreadsheetLauncher.launch(
+                                arrayOf("text/csv", "text/comma-separated-values", "application/vnd.ms-excel", "text/plain")
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth().testTag("spreadsheet_import"),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.size(8.dp))
+                        Text("Import Spreadsheet CSV")
                     }
                 }
             }
