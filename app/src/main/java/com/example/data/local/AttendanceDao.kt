@@ -28,6 +28,9 @@ interface AttendanceDao {
     @Query("SELECT * FROM attendances WHERE employeeId = :empId AND date = :date LIMIT 1")
     suspend fun getAttendanceByEmployeeAndDate(empId: String, date: String): AttendanceEntity?
 
+    @Query("SELECT * FROM attendances WHERE id = :id LIMIT 1")
+    suspend fun getAttendanceById(id: String): AttendanceEntity?
+
     @Query("SELECT COUNT(*) FROM attendances WHERE employeeId = :employeeId")
     suspend fun countReferencesToEmployee(employeeId: String): Int
 
