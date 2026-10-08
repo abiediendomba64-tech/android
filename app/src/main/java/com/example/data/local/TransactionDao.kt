@@ -37,15 +37,6 @@ interface TransactionDao {
     @Query("UPDATE transactions SET isArchived = 0, archivedAt = NULL, archivedBy = NULL WHERE id = :id")
     suspend fun restoreTransaction(id: String)
 
-    @Query("DELETE FROM transactions WHERE id = :id")
-    suspend fun permanentlyDelete(id: String)
-
-    @Query("DELETE FROM transactions WHERE isArchived = 1")
-    suspend fun emptyTrash()
-
-    @Query("DELETE FROM transactions")
-    suspend fun deleteAllTransactions()
-
     @Query("SELECT COUNT(*) FROM transactions WHERE isArchived = 0")
     suspend fun countActiveTransactions(): Int
 
