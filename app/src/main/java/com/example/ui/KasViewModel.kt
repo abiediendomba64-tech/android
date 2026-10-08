@@ -633,7 +633,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
 
     fun hitungArusKas(startDate: String, endDate: String): CashFlowStatement {
         return repository.calculateCashFlowStatement(
-            transactions = activeTransactions.value,
+            transactions = ledgerTransactions.value,
             accounts = accounts.value,
             startDate = startDate,
             endDate = endDate
