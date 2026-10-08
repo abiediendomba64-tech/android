@@ -59,7 +59,6 @@ fun ArsipScreen(
     modifier: Modifier = Modifier
 ) {
     val archivedList by viewModel.archivedTransactions.collectAsStateWithLifecycle()
-    var showEmptyTrashDialog by remember { mutableStateOf(false) }
 
     LazyColumn(
         modifier = modifier
@@ -96,15 +95,6 @@ fun ArsipScreen(
                         )
                     }
 
-                    if (archivedList.isNotEmpty()) {
-                        IconButton(onClick = { showEmptyTrashDialog = true }) {
-                            Icon(
-                                imageVector = Icons.Default.DeleteForever,
-                                contentDescription = "Kosongkan Sampah",
-                                tint = Color.White
-                            )
-                        }
-                    }
                 }
             }
         }
@@ -164,16 +154,6 @@ fun ArsipScreen(
                                 )
                             }
 
-                            IconButton(
-                                onClick = { viewModel.hapusPermanen(tx.id) },
-                                modifier = Modifier.size(36.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.DeleteForever,
-                                    contentDescription = "Hapus Permanen",
-                                    tint = ExpenseRed
-                                )
-                            }
                         }
                     }
                 }
@@ -185,27 +165,4 @@ fun ArsipScreen(
         }
     }
 
-    if (showEmptyTrashDialog) {
-        AlertDialog(
-            onDismissRequest = { showEmptyTrashDialog = false },
-            title = { Text("Kosongkan Semua Arsip?", fontWeight = FontWeight.Bold) },
-            text = { Text("Tindakan ini akan menghapus permanen seluruh transaksi di dalam folder arsip.") },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        viewModel.kosongkanArsip()
-                        showEmptyTrashDialog = false
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = ExpenseRed)
-                ) {
-                    Text("Hapus Semua")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showEmptyTrashDialog = false }) {
-                    Text("Batal")
-                }
-            }
-        )
-    }
 }
