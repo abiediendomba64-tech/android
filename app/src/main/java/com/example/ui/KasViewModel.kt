@@ -30,6 +30,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -113,9 +114,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val attendanceSummary: StateFlow<AttendanceSummary> = filteredAttendances.combine(
-        filteredAttendances
-    ) { list, _ ->
+    val attendanceSummary: StateFlow<AttendanceSummary> = filteredAttendances.map { list ->
         repository.calculateAttendanceSummary(list)
     }.stateIn(
         viewModelScope,

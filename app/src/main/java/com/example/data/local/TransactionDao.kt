@@ -46,4 +46,32 @@ interface TransactionDao {
             "OR (toAccount IS NOT NULL AND LOWER(TRIM(toAccount)) = LOWER(TRIM(:accountName)))"
     )
     suspend fun countReferencesToAccount(accountName: String): Int
+
+    @Query(
+        "SELECT COALESCE(SUM(CASE " +
+            "WHEN status = 'Selesai' AND type = 'MASUK' AND LOWER(TRIM(account)) = LOWER(TRIM(:accountName)) THEN amount " +
+            "WHEN status = 'Selesai' AND type = 'KELUAR' AND LOWER(TRIM(account)) = LOWER(TRIM(:accountName)) THEN -amount " +
+            "WHEN status = 'Selesai' AND type = 'TRANSFER' AND LOWER(TRIM(account)) = LOWER(TRIM(:accountName)) THEN -amount " +
+            "WHEN status = 'Selesai' AND type = 'TRANSFER' AND LOWER(TRIM(toAccount)) = LOWER(TRIM(:accountName)) THEN amount " +
+            "ELSE 0 END), 0.0) " +
+            "FROM transactions"
+    )
+    suspend fun sumSettledAccountMovement(accountName: String): Double
+
+    @Query(
+        "SELECT COALESCE(SUM(CASE " +
+            "WHEN status = 'Selesai' AND type = 'MASUK' AND LOWER(TRIM(account)) = LOWER(TRIM(:accountName)) THEN amount " +
+            "WHEN status = 'Selesai' AND type = 'KELUAR' AND LOWER(TRIM(account)) = LOWER(TRIM(:accountName)) THEN -amount " +
+            "WHEN status = 'Selesai' AND type = 'TRANSFER' AND LOWER(TRIM(account)) = LOWER(TRIM(:accountName)) THEN -amount " +
+            "WHEN status = 'Selesai' AND type = 'TRANSFER' AND LOWER(TRIM(toAccount)) = LOWER(TRIM(:accountName)) THEN amount " +
+            "ELSE 0 END), 0.0) " +
+            "FROM transactions " +
+            "WHERE status = 'Selesai' AND date <= :endDate " +
+            "AND (LOWER(TRIM(account)) = LOWER(TRIM(:accountName)) " +
+            "OR LOWER(TRIM(toAccount)) = LOWER(TRIM(:accountName)))"
+    )
+    suspend fun sumSettledAccountMovementUntilDate(accountName: String, endDate: String): Double
+
+    @Query("SELECT COUNT(*) FROM transactions WHERE category = :category AND receiptNo = :receiptNo")
+    suspend fun countByCategoryAndReceiptNo(category: String, receiptNo: String): Int
 }

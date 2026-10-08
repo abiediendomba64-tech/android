@@ -142,11 +142,8 @@ class KasRepository(
     private suspend fun insertValidatedTransaction(transaction: TransactionEntity) {
         validateTransaction(transaction)
         transactionDao.insertTransaction(transaction)
-        val ledger = (transactionDao.getAllActiveTransactions().first() +
-            transactionDao.getArchivedTransactions().first()).distinctBy { it.id }
         val postBalance = accountDao.getAccountByName(transaction.account)?.let { account ->
-            calculateAccountBalances(accountDao.getAllAccounts().first(), ledger)
-                .firstOrNull { it.account.id == account.id }?.currentBalance
+            account.initialBalance + transactionDao.sumSettledAccountMovement(account.name)
         } ?: 0.0
         val nowStamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
         auditDao.insertAuditLog(
@@ -559,12 +556,7 @@ class KasRepository(
             require(accountDao.getAccountByName(accountName)?.isActive == true) {
                 "Akun pembayaran $accountName tidak terdaftar atau nonaktif."
             }
-            val duplicate = (
-                transactionDao.getAllActiveTransactions().first() +
-                    transactionDao.getArchivedTransactions().first()
-            ).any {
-                it.category == "Gaji" && it.receiptNo == "PAYROLL-$period"
-            }
+            val duplicate = transactionDao.countByCategoryAndReceiptNo("Gaji", "PAYROLL-$period") > 0
             require(!duplicate) { "Payroll periode $period sudah dicairkan; transaksi duplikat ditolak." }
             val now = Date()
             val tx = TransactionEntity(
@@ -595,11 +587,8 @@ class KasRepository(
         val account = accountDao.getAccountByName(recon.accountName)
             ?: throw IllegalArgumentException("Akun rekonsiliasi ${recon.accountName} tidak terdaftar.")
         require(account.isActive) { "Akun rekonsiliasi ${account.name} nonaktif." }
-        val ledger = (
-            transactionDao.getAllActiveTransactions().first() +
-                transactionDao.getArchivedTransactions().first()
-        ).distinctBy { it.id }
-        val bookBalance = calculateAccountBalanceAtPeriod(account, recon.period, ledger)
+        val bookBalance = account.initialBalance +
+            transactionDao.sumSettledAccountMovementUntilDate(account.name, periodEndDate(recon.period))
         val difference = recon.statementBalance - bookBalance
         val normalized = recon.copy(
             accountName = account.name,
@@ -667,28 +656,39 @@ class KasRepository(
         accounts: List<AccountEntity>,
         transactions: List<TransactionEntity>
     ): List<AccountWithBalance> {
+        val settledTx = transactions.filter { it.status == "Selesai" }
+        val totalInByAccount = mutableMapOf<String, Double>()
+        val totalOutByAccount = mutableMapOf<String, Double>()
+
+        fun key(name: String): String = name.trim().lowercase(Locale.getDefault())
+        settledTx.forEach { tx ->
+            when (tx.type) {
+                "MASUK" -> {
+                    val k = key(tx.account)
+                    totalInByAccount[k] = (totalInByAccount[k] ?: 0.0) + tx.amount
+                }
+                "KELUAR" -> {
+                    val k = key(tx.account)
+                    totalOutByAccount[k] = (totalOutByAccount[k] ?: 0.0) + tx.amount
+                }
+                "TRANSFER" -> {
+                    val from = key(tx.account)
+                    val to = key(tx.toAccount.orEmpty())
+                    totalOutByAccount[from] = (totalOutByAccount[from] ?: 0.0) + tx.amount
+                    if (to.isNotBlank()) totalInByAccount[to] = (totalInByAccount[to] ?: 0.0) + tx.amount
+                }
+            }
+        }
+
         return accounts.map { account ->
-            val settledTx = transactions.filter { it.status == "Selesai" }
-
-            val totalMasuk = settledTx.filter { it.type == "MASUK" && it.account.equals(account.name, ignoreCase = true) }
-                .sumOf { it.amount }
-
-            val totalTransferMasuk = settledTx.filter { it.type == "TRANSFER" && it.toAccount?.equals(account.name, ignoreCase = true) == true }
-                .sumOf { it.amount }
-
-            val totalKeluar = settledTx.filter { it.type == "KELUAR" && it.account.equals(account.name, ignoreCase = true) }
-                .sumOf { it.amount }
-
-            val totalTransferKeluar = settledTx.filter { it.type == "TRANSFER" && it.account.equals(account.name, ignoreCase = true) }
-                .sumOf { it.amount }
-
-            val currentBalance = account.initialBalance + totalMasuk + totalTransferMasuk - totalKeluar - totalTransferKeluar
-
+            val k = key(account.name)
+            val totalMasuk = totalInByAccount[k] ?: 0.0
+            val totalKeluar = totalOutByAccount[k] ?: 0.0
             AccountWithBalance(
                 account = account,
-                totalMasuk = totalMasuk + totalTransferMasuk,
-                totalKeluar = totalKeluar + totalTransferKeluar,
-                currentBalance = currentBalance
+                totalMasuk = totalMasuk,
+                totalKeluar = totalKeluar,
+                currentBalance = account.initialBalance + totalMasuk - totalKeluar
             )
         }
     }
