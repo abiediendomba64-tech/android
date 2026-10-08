@@ -274,7 +274,7 @@ class KasRepository(
     }
 
     suspend fun saveBudget(budget: BudgetEntity) {
-        require(budget.period.equals("All", ignoreCase = true) || budget.period.matches(Regex("""\d{4}-\\d{2}"""))) { "Periode anggaran harus YYYY-MM atau All." }
+        require(budget.period.equals("All", ignoreCase = true) || budget.period.matches(Regex("""\d{4}-\d{2}"""))) { "Periode anggaran harus YYYY-MM atau All." }
         require(budget.category.isNotBlank()) { "Kategori anggaran wajib diisi." }
         require(budget.budgetAmount.isFinite() && budget.budgetAmount >= 0.0) { "Nominal anggaran tidak valid." }
         budgetDao.insertBudget(budget)
