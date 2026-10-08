@@ -12,6 +12,7 @@ import com.example.data.model.BudgetEntity
 import com.example.data.model.EmployeeEntity
 import com.example.data.model.TransactionEntity
 import com.example.data.repository.KasRepository
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -372,8 +373,8 @@ class ExampleRobolectricTest {
             )
         )
         val results = kotlinx.coroutines.coroutineScope {
-            val first = kotlinx.coroutines.async { runCatching { repository.payReceivable("PT-ATOMIC-001", 200000.0, "Kas Tunai") } }
-            val second = kotlinx.coroutines.async { runCatching { repository.payReceivable("PT-ATOMIC-001", 200000.0, "Kas Tunai") } }
+            val first = async { runCatching { repository.payReceivable("PT-ATOMIC-001", 200000.0, "Kas Tunai") } }
+            val second = async { runCatching { repository.payReceivable("PT-ATOMIC-001", 200000.0, "Kas Tunai") } }
             listOf(first.await(), second.await())
         }
         assertEquals(1, results.count { it.isSuccess })
