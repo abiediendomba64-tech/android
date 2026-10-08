@@ -566,6 +566,152 @@ class ExampleRobolectricTest {
     }
 
     @Test
+    fun saveTransactionRejectsInvalidDateAndDuplicateId() = runBlocking {
+        db.accountDao().insertAccount(AccountEntity("acc-validation", "Kas Validasi", "Kas", 0.0))
+        val valid = TransactionEntity(
+            id = "TX-VALIDATION-001",
+            type = "KELUAR",
+            date = "2026-10-08",
+            time = "10:00:00",
+            account = "Kas Validasi",
+            name = "Transaksi Valid",
+            category = "Operasional",
+            description = "",
+            amount = 1000.0,
+            allocation = "Operasional",
+            pic = "Admin",
+            status = "Selesai",
+            inputBy = "Admin"
+        )
+        repository.saveTransaction(valid)
+
+        try {
+            repository.saveTransaction(valid.copy(id = "TX-VALIDATION-002", date = "2026-99-99"))
+            throw AssertionError("Tanggal kalender invalid harus ditolak.")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message?.contains("tanggal kalender") == true)
+        }
+
+        try {
+            repository.saveTransaction(valid)
+            throw AssertionError("ID transaksi duplikat harus ditolak.")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message?.contains("ID transaksi") == true)
+        }
+        assertEquals(1, db.transactionDao().getAllActiveTransactions().first().size)
+    }
+
+    @Test
+    fun transferRejectsInactiveDestinationAccount() = runBlocking {
+        db.accountDao().insertAccounts(
+            listOf(
+                AccountEntity("acc-source", "Kas Sumber", "Kas", 0.0),
+                AccountEntity("acc-dest", "Bank Tujuan", "Bank", 0.0, isActive = false)
+            )
+        )
+        val tx = TransactionEntity(
+            id = "TR-INACTIVE-001",
+            type = "TRANSFER",
+            date = "2026-10-08",
+            time = "10:00:00",
+            account = "Kas Sumber",
+            toAccount = "Bank Tujuan",
+            name = "Transfer",
+            category = "Transfer Masuk",
+            description = "",
+            amount = 1000.0,
+            allocation = "Operasional",
+            pic = "Admin",
+            status = "Selesai",
+            inputBy = "Admin"
+        )
+        try {
+            repository.saveTransaction(tx)
+            throw AssertionError("Transfer ke akun nonaktif harus ditolak.")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message?.contains("nonaktif") == true)
+        }
+    }
+
+    @Test
+    fun restoreCollisionDoesNotOverwriteExistingTransaction() = runBlocking {
+        db.accountDao().insertAccount(AccountEntity("acc-restore-collision", "Kas Collision", "Kas", 0.0))
+        db.transactionDao().insertTransaction(
+            TransactionEntity(
+                id = "TX-COLLISION-001",
+                type = "MASUK",
+                date = "2026-10-08",
+                time = "10:00:00",
+                account = "Kas Collision",
+                name = "Data Asli",
+                category = "Penjualan",
+                description = "",
+                amount = 5000.0,
+                allocation = "Operasional",
+                pic = "Admin",
+                status = "Selesai"
+            )
+        )
+        val backup = """
+            {
+              "transactions": [
+                {
+                  "id": "TX-COLLISION-001",
+                  "type": "MASUK",
+                  "date": "2026-10-08",
+                  "time": "10:00:00",
+                  "account": "Kas Collision",
+                  "toAccount": null,
+                  "name": "Harus Ditolak",
+                  "category": "Penjualan",
+                  "description": "",
+                  "amount": 999999,
+                  "allocation": "Operasional",
+                  "pic": "Admin",
+                  "proofUrl": "",
+                  "receiptNo": "",
+                  "project": "",
+                  "note": "",
+                  "status": "Selesai",
+                  "inputTime": 1791434400000,
+                  "inputBy": "Admin",
+                  "isArchived": false,
+                  "archivedAt": null,
+                  "archivedBy": null
+                }
+              ]
+            }
+        """.trimIndent()
+        val result = repository.restoreDataFromJson(backup)
+        assertFalse(result.isSuccess)
+        assertEquals(5000.0, db.transactionDao().getTransactionById("TX-COLLISION-001")?.amount ?: 0.0, 0.01)
+    }
+
+    @Test
+    fun transactionAuditStoresActualPostBalance() = runBlocking {
+        db.accountDao().insertAccount(AccountEntity("acc-audit", "Kas Audit", "Kas", 1000.0))
+        repository.saveTransaction(
+            TransactionEntity(
+                id = "TX-AUDIT-001",
+                type = "MASUK",
+                date = "2026-10-08",
+                time = "10:00:00",
+                account = "Kas Audit",
+                name = "Pemasukan",
+                category = "Penjualan",
+                description = "",
+                amount = 2500.0,
+                allocation = "Operasional",
+                pic = "Admin",
+                status = "Selesai",
+                inputBy = "Admin"
+            )
+        )
+        val log = db.auditDao().getAllAuditLogs().first { it.recordId == "TX-AUDIT-001" }
+        assertEquals(3500.0, log.balanceAfter, 0.01)
+    }
+
+    @Test
     fun archivedTransactionStillContributesToLedgerBalance() = runBlocking {
         db.accountDao().insertAccount(AccountEntity("acc-1", "Kas Tunai", "Kas", 0.0))
         val tx = TransactionEntity("TX-ARCH-001", "MASUK", "2026-10-01", "10:00:00", "Kas Tunai", null, "Archived", "Penjualan", "", 500000.0, status = "Selesai")
