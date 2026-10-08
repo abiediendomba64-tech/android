@@ -1320,7 +1320,7 @@ class KasRepository(
                     require(audit.dateFormatted.isNotBlank() && audit.action.isNotBlank() && audit.recordId.isNotBlank()) { "Backup memiliki audit log yang tidak lengkap." }
                     require(audit.balanceAfter.isFinite()) { "Audit log ${audit.recordId} memiliki balanceAfter tidak valid." }
                 }
-                if (audits.isNotEmpty()) auditDao.insertAuditLogs(audits)
+                audits.forEach { auditDao.insertAuditLog(it) }
             }
 
             Result.success(transactions.size)
