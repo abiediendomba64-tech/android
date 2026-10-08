@@ -19,7 +19,7 @@ interface AccountDao {
     @Query("SELECT * FROM accounts WHERE id = :id LIMIT 1")
     suspend fun getAccountById(id: String): AccountEntity?
 
-    @Query("SELECT * FROM accounts WHERE name = :name LIMIT 1")
+    @Query("SELECT * FROM accounts WHERE LOWER(TRIM(name)) = LOWER(TRIM(:name)) LIMIT 1")
     suspend fun getAccountByName(name: String): AccountEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)

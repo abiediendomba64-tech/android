@@ -713,7 +713,7 @@ fun AbsensiScreen(
 
     // Modal Disburse Salary to Kas Keluar
     if (showDisburseSalaryDialog) {
-        val totalDisburse = summary.totalAllowance
+        val totalDisburse = viewModel.hitungTotalPayroll(employees, filteredAttendances)
         val periodText = when (filterMode) {
             "Harian" -> selectedDate
             "Bulanan" -> selectedMonth
@@ -817,16 +817,17 @@ fun AbsensiScreen(
     if (selectedEmployeeForPayslip != null) {
         val emp = selectedEmployeeForPayslip!!
         val empAtts = filteredAttendances.filter { it.employeeId == emp.id }
+        val payroll = viewModel.hitungPayrollKaryawan(emp, empAtts)
         val hadirDays = empAtts.count { it.status == "Hadir" }
         val alpaDays = empAtts.count { it.status == "Alpa" }
         val lemburHours = empAtts.sumOf { it.overtimeHours }
-        val uangKehadiran = hadirDays * emp.dailyRate
-        val uangLembur = lemburHours * (emp.dailyRate / 8.0 * 1.5)
-        val gajiPokok = emp.monthlySalary
-        val totalKotor = gajiPokok + uangKehadiran + uangLembur
-        val potonganAlpa = alpaDays * emp.dailyRate
-        val totalPotongan = potonganAlpa
-        val takeHomePay = (totalKotor - totalPotongan).coerceAtLeast(0.0)
+        val uangKehadiran = payroll.attendanceAllowance
+        val uangLembur = payroll.overtimePay
+        val gajiPokok = payroll.baseSalary
+        val totalKotor = payroll.gross
+        val potonganAlpa = payroll.absenceDeduction
+        val totalPotongan = payroll.totalDeduction
+        val takeHomePay = payroll.net
 
         val periodLabel = when (filterMode) {
             "Harian" -> selectedDate

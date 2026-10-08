@@ -1,6 +1,7 @@
 package com.example.data.repository
 
 import com.example.data.local.AccountDao
+import com.example.data.local.AppDatabase
 import com.example.data.local.AttendanceDao
 import com.example.data.local.AuditDao
 import com.example.data.local.BankReconDao
@@ -9,6 +10,7 @@ import com.example.data.local.EmployeeDao
 import com.example.data.local.NoteDao
 import com.example.data.local.ReceivableDao
 import com.example.data.local.TransactionDao
+import androidx.room.withTransaction
 import com.example.data.model.AccountEntity
 import com.example.data.model.AttendanceEntity
 import com.example.data.model.AuditLogEntity
@@ -19,12 +21,14 @@ import com.example.data.model.EmployeeEntity
 import com.example.data.model.ReceivableEntity
 import com.example.data.model.TransactionEntity
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
 import java.text.SimpleDateFormat
 import java.util.Date
+import java.util.Calendar
 import java.util.Locale
 import java.util.UUID
 
@@ -67,6 +71,17 @@ data class CashFlowStatement(
     val closingBalance: Double
 )
 
+data class PayrollCalculation(
+    val employeeId: String,
+    val baseSalary: Double,
+    val attendanceAllowance: Double,
+    val overtimePay: Double,
+    val absenceDeduction: Double,
+    val gross: Double,
+    val totalDeduction: Double,
+    val net: Double
+)
+
 data class AttendanceSummary(
     val totalEmployees: Int,
     val totalHadir: Int,
@@ -85,6 +100,7 @@ data class IntegrityAuditResult(
 )
 
 class KasRepository(
+    private val database: AppDatabase,
     private val transactionDao: TransactionDao,
     private val accountDao: AccountDao,
     private val budgetDao: BudgetDao,
@@ -97,6 +113,13 @@ class KasRepository(
 ) {
     val activeTransactions: Flow<List<TransactionEntity>> = transactionDao.getAllActiveTransactions()
     val archivedTransactions: Flow<List<TransactionEntity>> = transactionDao.getArchivedTransactions()
+    // Archived records remain part of the financial ledger; archive is not a reversal.
+    val ledgerTransactions: Flow<List<TransactionEntity>> = combine(
+        activeTransactions,
+        archivedTransactions
+    ) { active, archived ->
+        (active + archived).distinctBy { it.id }
+    }
     val accounts: Flow<List<AccountEntity>> = accountDao.getAllAccounts()
     val budgets: Flow<List<BudgetEntity>> = budgetDao.getAllBudgets()
     val receivables: Flow<List<ReceivableEntity>> = receivableDao.getAllReceivables()
@@ -107,10 +130,12 @@ class KasRepository(
     val bankReconciliations: Flow<List<BankReconEntity>> = bankReconDao.getAllReconciliations()
 
     suspend fun saveTransaction(transaction: TransactionEntity) {
+        database.withTransaction { insertValidatedTransaction(transaction) }
+    }
+
+    private suspend fun insertValidatedTransaction(transaction: TransactionEntity) {
         validateTransaction(transaction)
         transactionDao.insertTransaction(transaction)
-
-        // Audit trail records the write; it does not claim external formula verification.
         val nowStamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
         auditDao.insertAuditLog(
             AuditLogEntity(
@@ -249,7 +274,7 @@ class KasRepository(
     }
 
     suspend fun saveBudget(budget: BudgetEntity) {
-        require(budget.period.equals("All", ignoreCase = true) || budget.period.matches(Regex("""\d{4}-\\d{2}"""))) { "Periode anggaran harus YYYY-MM atau All." }
+        require(budget.period.equals("All", ignoreCase = true) || budget.period.matches(Regex("""\d{4}-\d{2}"""))) { "Periode anggaran harus YYYY-MM atau All." }
         require(budget.category.isNotBlank()) { "Kategori anggaran wajib diisi." }
         require(budget.budgetAmount.isFinite() && budget.budgetAmount >= 0.0) { "Nominal anggaran tidak valid." }
         budgetDao.insertBudget(budget)
@@ -272,93 +297,85 @@ class KasRepository(
     }
 
     suspend fun payReceivable(id: String, paymentAmount: Double, targetAccount: String, pic: String = "Bendahara") {
-        val current = receivableDao.getReceivableById(id)
-            ?: throw IllegalArgumentException("Piutang $id tidak ditemukan.")
-        require(paymentAmount.isFinite() && paymentAmount > 0.0) { "Nominal pembayaran harus lebih besar dari Rp 0." }
-        require(current.type == "PIUTANG") { "Record ${current.id} bukan piutang." }
-        require(paymentAmount <= current.remainingAmount) { "Pembayaran melebihi sisa piutang ${current.id}." }
-        require(accountDao.getAccountByName(targetAccount)?.isActive == true) { "Akun penerimaan $targetAccount tidak terdaftar atau nonaktif." }
-        val updatedPaid = current.paidAmount + paymentAmount
-        val newStatus = if (updatedPaid >= current.totalAmount) "Lunas" else current.status
-        receivableDao.updateReceivable(
-            current.copy(
-                paidAmount = updatedPaid,
-                status = newStatus
+        database.withTransaction {
+            val current = receivableDao.getReceivableById(id)
+                ?: throw IllegalArgumentException("Piutang $id tidak ditemukan.")
+            require(paymentAmount.isFinite() && paymentAmount > 0.0) { "Nominal pembayaran harus lebih besar dari Rp 0." }
+            require(current.type == "PIUTANG") { "Record ${current.id} bukan piutang." }
+            require(paymentAmount <= current.remainingAmount) { "Pembayaran melebihi sisa piutang ${current.id}." }
+            require(accountDao.getAccountByName(targetAccount)?.isActive == true) { "Akun penerimaan $targetAccount tidak terdaftar atau nonaktif." }
+            val updatedPaid = current.paidAmount + paymentAmount
+            val newStatus = if (updatedPaid >= current.totalAmount) "Lunas" else current.status
+            receivableDao.updateReceivable(current.copy(paidAmount = updatedPaid, status = newStatus))
+            val now = Date()
+            val tx = TransactionEntity(
+                id = generateId("KM"),
+                type = "MASUK",
+                date = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(now),
+                time = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(now),
+                account = targetAccount,
+                name = "Pelunasan Piutang: ${current.customerName}",
+                category = "Piutang Masuk",
+                description = "Pembayaran piutang (${current.customerName} - ${current.description})",
+                amount = paymentAmount,
+                allocation = "Operasional",
+                pic = pic,
+                receiptNo = "PIU-${current.id}",
+                status = "Selesai"
             )
-        )
-
-        val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-        val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
-        val now = Date()
-        val kmTransaction = TransactionEntity(
-            id = generateId("KM"),
-            type = "MASUK",
-            date = dateFormat.format(now),
-            time = timeFormat.format(now),
-            account = targetAccount,
-            name = "Pelunasan Piutang: ${current.customerName}",
-            category = "Piutang Masuk",
-            description = "Pembayaran piutang (${current.customerName} - ${current.description})",
-            amount = paymentAmount,
-            allocation = "Operasional",
-            pic = pic,
-            receiptNo = "PIU-${current.id}",
-            status = "Selesai"
-        )
-        saveTransaction(kmTransaction)
+            insertValidatedTransaction(tx)
+        }
     }
 
     suspend fun payHutang(id: String, paymentAmount: Double, sourceAccount: String, pic: String = "Bendahara") {
-        val current = receivableDao.getReceivableById(id)
-            ?: throw IllegalArgumentException("Hutang $id tidak ditemukan.")
-        require(paymentAmount.isFinite() && paymentAmount > 0.0) { "Nominal pembayaran harus lebih besar dari Rp 0." }
-        require(current.type == "HUTANG") { "Record ${current.id} bukan hutang." }
-        require(paymentAmount <= current.remainingAmount) { "Pembayaran melebihi sisa hutang ${current.id}." }
-        require(accountDao.getAccountByName(sourceAccount)?.isActive == true) { "Akun pembayaran $sourceAccount tidak terdaftar atau nonaktif." }
-        val updatedPaid = current.paidAmount + paymentAmount
-        val newStatus = if (updatedPaid >= current.totalAmount) "Lunas" else current.status
-        receivableDao.updateReceivable(
-            current.copy(
-                paidAmount = updatedPaid,
-                status = newStatus
+        database.withTransaction {
+            val current = receivableDao.getReceivableById(id)
+                ?: throw IllegalArgumentException("Hutang $id tidak ditemukan.")
+            require(paymentAmount.isFinite() && paymentAmount > 0.0) { "Nominal pembayaran harus lebih besar dari Rp 0." }
+            require(current.type == "HUTANG") { "Record ${current.id} bukan hutang." }
+            require(paymentAmount <= current.remainingAmount) { "Pembayaran melebihi sisa hutang ${current.id}." }
+            require(accountDao.getAccountByName(sourceAccount)?.isActive == true) { "Akun pembayaran $sourceAccount tidak terdaftar atau nonaktif." }
+            val updatedPaid = current.paidAmount + paymentAmount
+            val newStatus = if (updatedPaid >= current.totalAmount) "Lunas" else current.status
+            receivableDao.updateReceivable(current.copy(paidAmount = updatedPaid, status = newStatus))
+            val now = Date()
+            val tx = TransactionEntity(
+                id = generateId("KK"),
+                type = "KELUAR",
+                date = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(now),
+                time = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(now),
+                account = sourceAccount,
+                name = "Pembayaran Hutang: ${current.customerName}",
+                category = "Belanja Barang",
+                description = "Pelunasan hutang pembelian (${current.customerName} - ${current.description})",
+                amount = paymentAmount,
+                allocation = "Operasional",
+                pic = pic,
+                receiptNo = "HUT-${current.id}",
+                status = "Selesai"
             )
-        )
-
-        val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-        val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
-        val now = Date()
-        val kkTransaction = TransactionEntity(
-            id = generateId("KK"),
-            type = "KELUAR",
-            date = dateFormat.format(now),
-            time = timeFormat.format(now),
-            account = sourceAccount,
-            name = "Pembayaran Hutang: ${current.customerName}",
-            category = "Belanja Barang",
-            description = "Pelunasan hutang pembelian (${current.customerName} - ${current.description})",
-            amount = paymentAmount,
-            allocation = "Operasional",
-            pic = pic,
-            receiptNo = "HUT-${current.id}",
-            status = "Selesai"
-        )
-        saveTransaction(kkTransaction)
+            insertValidatedTransaction(tx)
+        }
     }
 
     suspend fun updateTransaction(newTx: TransactionEntity, oldTx: TransactionEntity) {
-        transactionDao.updateTransaction(newTx)
-        val nowStamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-        auditDao.insertAuditLog(
-            AuditLogEntity(
-                dateFormatted = nowStamp,
-                action = "UPDATE_TRANSACTION",
-                recordId = newTx.id,
-                details = "Perubahan transaksi ${newTx.id}: [Lama: ${oldTx.name}, Rp ${oldTx.amount.toLong()}, ${oldTx.account}] -> [Baru: ${newTx.name}, Rp ${newTx.amount.toLong()}, ${newTx.account}]",
-                user = "Admin",
-                verifiedFormulaStatus = "RECORDED",
-                balanceAfter = 0.0
+        database.withTransaction {
+            require(transactionDao.getTransactionById(newTx.id) != null) { "Transaksi ${newTx.id} tidak ditemukan." }
+            validateTransaction(newTx)
+            transactionDao.updateTransaction(newTx)
+            val nowStamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+            auditDao.insertAuditLog(
+                AuditLogEntity(
+                    dateFormatted = nowStamp,
+                    action = "UPDATE_TRANSACTION",
+                    recordId = newTx.id,
+                    details = "Perubahan transaksi ${newTx.id}: [Lama: ${oldTx.name}, Rp ${oldTx.amount.toLong()}, ${oldTx.account}] -> [Baru: ${newTx.name}, Rp ${newTx.amount.toLong()}, ${newTx.account}]",
+                    user = "Admin",
+                    verifiedFormulaStatus = "RECORDED",
+                    balanceAfter = 0.0
+                )
             )
-        )
+        }
     }
 
     suspend fun deleteReceivable(id: String) {
@@ -423,15 +440,64 @@ class KasRepository(
         attendanceDao.deleteAttendance(id)
     }
 
+    suspend fun savePayrollDisbursement(
+        period: String,
+        totalAmount: Double,
+        accountName: String
+    ): String {
+        require(totalAmount.isFinite() && totalAmount > 0.0) { "Total payroll harus lebih besar dari Rp 0." }
+        require(period.isNotBlank()) { "Periode payroll wajib diisi." }
+        return database.withTransaction {
+            require(accountDao.getAccountByName(accountName)?.isActive == true) {
+                "Akun pembayaran $accountName tidak terdaftar atau nonaktif."
+            }
+            val duplicate = (
+                transactionDao.getAllActiveTransactions().first() +
+                    transactionDao.getArchivedTransactions().first()
+            ).any {
+                it.category == "Gaji" && it.receiptNo == "PAYROLL-$period"
+            }
+            require(!duplicate) { "Payroll periode $period sudah dicairkan; transaksi duplikat ditolak." }
+            val now = Date()
+            val tx = TransactionEntity(
+                id = generateId("KK"),
+                type = "KELUAR",
+                date = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(now),
+                time = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(now),
+                account = accountName,
+                name = "Pembayaran Gaji & Tunjangan Karyawan ($period)",
+                category = "Gaji",
+                description = "Pencairan payroll berdasarkan rekap absensi periode $period",
+                amount = totalAmount,
+                allocation = "Gaji",
+                pic = "Bendahara",
+                receiptNo = "PAYROLL-$period",
+                status = "Selesai"
+            )
+            insertValidatedTransaction(tx)
+            tx.id
+        }
+    }
+
+
     // Bank Reconciliation Operations
     suspend fun saveBankReconciliation(recon: BankReconEntity) {
-        require(accountDao.getAccountByName(recon.accountName)?.isActive == true) { "Akun rekonsiliasi tidak terdaftar atau nonaktif." }
         require(recon.statementBalance.isFinite() && recon.statementBalance >= 0.0) { "Saldo rekening koran tidak valid." }
-        require(recon.period.matches(Regex("""\d{4}-\\d{2}"""))) { "Periode rekonsiliasi harus YYYY-MM." }
-        val computedDifference = recon.statementBalance - recon.bookBalance
+        require(recon.period.matches(Regex("""\d{4}-\d{2}"""))) { "Periode rekonsiliasi harus YYYY-MM." }
+        val account = accountDao.getAccountByName(recon.accountName)
+            ?: throw IllegalArgumentException("Akun rekonsiliasi ${recon.accountName} tidak terdaftar.")
+        require(account.isActive) { "Akun rekonsiliasi ${account.name} nonaktif." }
+        val ledger = (
+            transactionDao.getAllActiveTransactions().first() +
+                transactionDao.getArchivedTransactions().first()
+        ).distinctBy { it.id }
+        val bookBalance = calculateAccountBalanceAtPeriod(account, recon.period, ledger)
+        val difference = recon.statementBalance - bookBalance
         val normalized = recon.copy(
-            difference = computedDifference,
-            status = if (kotlin.math.abs(computedDifference) < 1.0) "Cocok" else "Selisih"
+            accountName = account.name,
+            bookBalance = bookBalance,
+            difference = difference,
+            status = if (kotlin.math.abs(difference) < 1.0) "Cocok" else "Selisih"
         )
         bankReconDao.insertReconciliation(normalized)
         val nowStamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
@@ -439,13 +505,14 @@ class KasRepository(
             AuditLogEntity(
                 dateFormatted = nowStamp,
                 action = "BANK_RECONCILE",
-                recordId = recon.id,
+                recordId = normalized.id,
                 details = "Rekonsiliasi ${normalized.accountName} periode ${normalized.period}: Buku Rp ${normalized.bookBalance.toLong()} vs Bank Rp ${normalized.statementBalance.toLong()} (Selisih: Rp ${normalized.difference.toLong()} - ${normalized.status})",
-                user = recon.reconciledBy,
+                user = normalized.reconciledBy,
                 verifiedFormulaStatus = "RECORDED"
             )
         )
     }
+
 
     suspend fun logDirectAudit(audit: AuditLogEntity) {
         auditDao.insertAuditLog(audit)
@@ -456,6 +523,37 @@ class KasRepository(
         val uuid = UUID.randomUUID().toString().take(6).uppercase()
         return "$prefix-$stamp-$uuid"
     }
+
+    fun calculateAccountBalanceAtPeriod(
+        account: AccountEntity,
+        period: String,
+        transactions: List<TransactionEntity>
+    ): Double {
+        require(period.matches(Regex("""\d{4}-\d{2}"""))) { "Periode harus YYYY-MM." }
+        val endDate = periodEndDate(period)
+        return account.initialBalance + transactions.asSequence()
+            .filter { it.status == "Selesai" && it.date <= endDate }
+            .sumOf { tx ->
+                when {
+                    tx.type == "MASUK" && tx.account.equals(account.name, ignoreCase = true) -> tx.amount
+                    tx.type == "KELUAR" && tx.account.equals(account.name, ignoreCase = true) -> -tx.amount
+                    tx.type == "TRANSFER" && tx.toAccount?.equals(account.name, ignoreCase = true) == true -> tx.amount
+                    tx.type == "TRANSFER" && tx.account.equals(account.name, ignoreCase = true) -> -tx.amount
+                    else -> 0.0
+                }
+            }
+    }
+
+    private fun periodEndDate(period: String): String {
+        val parser = SimpleDateFormat("yyyy-MM", Locale.getDefault()).apply { isLenient = false }
+        val parsed = parser.parse(period) ?: throw IllegalArgumentException("Periode tidak valid: $period")
+        val calendar = Calendar.getInstance().apply {
+            time = parsed
+            set(Calendar.DAY_OF_MONTH, getActualMaximum(Calendar.DAY_OF_MONTH))
+        }
+        return SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(calendar.time)
+    }
+
 
     fun calculateAccountBalances(
         accounts: List<AccountEntity>,
@@ -599,6 +697,32 @@ class KasRepository(
             closingBalance = closingBal
         )
     }
+    fun calculatePayrollForEmployee(
+        employee: EmployeeEntity,
+        attendances: List<AttendanceEntity>
+    ): PayrollCalculation {
+        val employeeAttendances = attendances.filter { it.employeeId == employee.id }
+        val hadirDays = employeeAttendances.count { it.status.equals("Hadir", ignoreCase = true) }
+        val alpaDays = employeeAttendances.count { it.status.equals("Alpa", ignoreCase = true) }
+        val overtimeHours = employeeAttendances.sumOf { it.overtimeHours }
+        val recordedAllowance = employeeAttendances.sumOf { it.dailyAllowance }
+        val expectedAllowance = hadirDays * employee.dailyRate
+        val attendanceAllowance = if (recordedAllowance > 0.0) recordedAllowance else expectedAllowance
+        val overtimePay = overtimeHours * (employee.dailyRate / 8.0 * 1.5)
+        val baseSalary = employee.monthlySalary
+        val gross = baseSalary + attendanceAllowance + overtimePay
+        val absenceDeduction = alpaDays * employee.dailyRate
+        val totalDeduction = absenceDeduction
+        val net = (gross - totalDeduction).coerceAtLeast(0.0)
+        return PayrollCalculation(employee.id, baseSalary, attendanceAllowance, overtimePay, absenceDeduction, gross, totalDeduction, net)
+    }
+
+    fun calculatePayrollTotal(
+        employees: List<EmployeeEntity>,
+        attendances: List<AttendanceEntity>
+    ): Double = employees.sumOf { calculatePayrollForEmployee(it, attendances).net }
+
+
     fun calculateAttendanceSummary(attendances: List<AttendanceEntity>): AttendanceSummary {
         val empSet = attendances.map { it.employeeId }.toSet()
         val hadir = attendances.count { it.status.equals("Hadir", ignoreCase = true) }
