@@ -77,6 +77,9 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
     val employees: StateFlow<List<EmployeeEntity>> = repository.employees
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    private val allEmployees: StateFlow<List<EmployeeEntity>> = repository.allEmployees
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     val attendances: StateFlow<List<AttendanceEntity>> = repository.attendances
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -334,15 +337,13 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
 
     fun hapusPermanen(id: String) {
         viewModelScope.launch {
-            repository.permanentlyDeleteTransaction(id)
-            _snackBarMessage.emit("Transaksi $id dihapus permanen.")
+            _snackBarMessage.emit("Penghapusan permanen transaksi dinonaktifkan untuk menjaga histori ledger.")
         }
     }
 
     fun kosongkanArsip() {
         viewModelScope.launch {
-            repository.emptyTrash()
-            _snackBarMessage.emit("Semua arsip transaksi berhasil dibersihkan.")
+            _snackBarMessage.emit("Pengosongan arsip permanen dinonaktifkan agar histori ledger tetap utuh.")
         }
     }
 
@@ -357,8 +358,11 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
 
     fun hapusAkun(id: String) {
         viewModelScope.launch {
-            repository.deleteAccount(id)
-            _snackBarMessage.emit("Akun berhasil dihapus.")
+            val physicallyDeleted = repository.deleteAccount(id)
+            _snackBarMessage.emit(
+                if (physicallyDeleted) "Akun berhasil dihapus."
+                else "Akun dinonaktifkan karena masih memiliki histori data."
+            )
         }
     }
 
@@ -537,7 +541,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
                 transactions = ledgerTransactions.value,
                 budgets = budgets.value,
                 receivables = receivables.value,
-                employees = employees.value,
+                employees = allEmployees.value,
                 attendances = attendances.value
             )
             val accountsSnapshot = accountsWithBalance.value
@@ -693,8 +697,11 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
 
     fun hapusKaryawan(id: String) {
         viewModelScope.launch {
-            repository.deleteEmployee(id)
-            _snackBarMessage.emit("Data karyawan berhasil dihapus.")
+            val physicallyDeleted = repository.deleteEmployee(id)
+            _snackBarMessage.emit(
+                if (physicallyDeleted) "Data karyawan berhasil dihapus."
+                else "Karyawan dinonaktifkan karena masih memiliki histori absensi."
+            )
         }
     }
 }

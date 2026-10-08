@@ -70,7 +70,7 @@ fun KasKeluarScreen(
 
     var date by remember { mutableStateOf(todayStr) }
     var selectedAccount by remember { mutableStateOf(accounts.firstOrNull()?.name.orEmpty()) }
-    var transactionName by remember { mutableStateOf("Belanja Barang") }
+    var transactionName by remember { mutableStateOf("") }
     var selectedCategory by remember { mutableStateOf(viewModel.masterKategoriKeluar.first()) }
     var description by remember { mutableStateOf("") }
     var amountText by remember { mutableStateOf("") }

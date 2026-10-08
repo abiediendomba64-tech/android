@@ -110,10 +110,10 @@ fun AbsensiScreen(
     // Employee Form States
     var empName by remember { mutableStateOf("") }
     var empPosition by remember { mutableStateOf("") }
-    var empDept by remember { mutableStateOf("Operasional") }
+    var empDept by remember { mutableStateOf("") }
     var empPhone by remember { mutableStateOf("") }
-    var empDailyRate by remember { mutableStateOf("150000") }
-    var empSalary by remember { mutableStateOf("3500000") }
+    var empDailyRate by remember { mutableStateOf("") }
+    var empSalary by remember { mutableStateOf("") }
 
     // Attendance Form States
     var selectedEmpId by remember { mutableStateOf(employees.firstOrNull()?.id ?: "") }
@@ -123,8 +123,8 @@ fun AbsensiScreen(
     var attOvertime by remember { mutableStateOf("0") }
     var attNotes by remember { mutableStateOf("") }
 
-    val accountNames = accounts.map { it.name }.ifEmpty { listOf("Bank BCA", "Kas Tunai") }
-    var disburseAccount by remember { mutableStateOf(accountNames.first()) }
+    val accountNames = accounts.map { it.name }
+    var disburseAccount by remember { mutableStateOf(accountNames.firstOrNull().orEmpty()) }
 
     Scaffold(
         floatingActionButton = {
@@ -591,9 +591,9 @@ fun AbsensiScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        val rate = empDailyRate.toDoubleOrNull() ?: 0.0
-                        val sal = empSalary.toDoubleOrNull() ?: 0.0
-                        if (empName.isNotBlank()) {
+                        val rate = empDailyRate.toDoubleOrNull()
+                        val sal = empSalary.toDoubleOrNull()
+                        if (empName.isNotBlank() && rate != null && sal != null && rate >= 0.0 && sal >= 0.0) {
                             viewModel.tambahKaryawan(empName, empPosition, empDept, empPhone, rate, sal)
                             showAddEmployeeDialog = false
                             empName = ""
@@ -735,18 +735,27 @@ fun AbsensiScreen(
 
                     HorizontalDivider()
 
-                    FormDropdown(
-                        label = "Pilih Akun Sumber Pembayaran",
-                        selectedValue = disburseAccount,
-                        options = accountNames,
-                        onValueChange = { disburseAccount = it }
-                    )
+                    if (accountNames.isEmpty()) {
+                        Text(
+                            "Belum ada akun aktif. Tambahkan akun kas/bank terlebih dahulu sebelum mencairkan payroll.",
+                            color = MaterialTheme.colorScheme.error,
+                            fontSize = 12.sp
+                        )
+                    } else {
+                        FormDropdown(
+                            label = "Pilih Akun Sumber Pembayaran",
+                            selectedValue = disburseAccount,
+                            options = accountNames,
+                            onValueChange = { disburseAccount = it }
+                        )
+                    }
                 }
             },
             confirmButton = {
                 Button(
+                    enabled = totalDisburse > 0 && disburseAccount.isNotBlank() && accountNames.isNotEmpty(),
                     onClick = {
-                        if (totalDisburse > 0) {
+                        if (totalDisburse > 0 && disburseAccount.isNotBlank()) {
                             viewModel.cairkanGajiAbsensiKeKasKeluar(
                                 period = periodText,
                                 totalGaji = totalDisburse,
@@ -967,7 +976,7 @@ fun AbsensiScreen(
             icon = { Icon(imageVector = Icons.Default.Warning, contentDescription = null, tint = ExpenseRed) },
             title = { Text("Konfirmasi Hapus Data Karyawan") },
             text = {
-                Text("Apakah Anda yakin ingin menghapus data karyawan ${toDel.name} (${toDel.id} - ${toDel.position}) secara permanen?")
+                Text("Apakah Anda yakin ingin menghapus data karyawan ${toDel.name} (${toDel.id} - ${toDel.position}) Histori absensi akan dipertahankan; bila masih berelasi, karyawan akan dinonaktifkan.")
             },
             confirmButton = {
                 Button(
@@ -977,7 +986,7 @@ fun AbsensiScreen(
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = ExpenseRed)
                 ) {
-                    Text("Hapus Permanen")
+                    Text("Lanjutkan")
                 }
             },
             dismissButton = {

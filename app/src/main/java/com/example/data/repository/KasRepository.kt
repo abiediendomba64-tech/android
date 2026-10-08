@@ -125,184 +125,217 @@ class KasRepository(
     val receivables: Flow<List<ReceivableEntity>> = receivableDao.getAllReceivables()
     val notes: Flow<List<CashNoteEntity>> = noteDao.getAllNotes()
     val employees: Flow<List<EmployeeEntity>> = employeeDao.getAllActiveEmployees()
+    val allEmployees: Flow<List<EmployeeEntity>> = employeeDao.getAllEmployees()
     val attendances: Flow<List<AttendanceEntity>> = attendanceDao.getAllAttendances()
     val auditLogs: Flow<List<AuditLogEntity>> = auditDao.getRecentAuditLogs()
     val bankReconciliations: Flow<List<BankReconEntity>> = bankReconDao.getAllReconciliations()
 
     suspend fun saveTransaction(transaction: TransactionEntity) {
-        database.withTransaction { insertValidatedTransaction(transaction) }
+        database.withTransaction {
+            require(transactionDao.getTransactionById(transaction.id) == null) {
+                "ID transaksi " + transaction.id + " sudah digunakan."
+            }
+            insertValidatedTransaction(transaction)
+        }
     }
 
     private suspend fun insertValidatedTransaction(transaction: TransactionEntity) {
         validateTransaction(transaction)
         transactionDao.insertTransaction(transaction)
+        val ledger = (transactionDao.getAllActiveTransactions().first() +
+            transactionDao.getArchivedTransactions().first()).distinctBy { it.id }
+        val postBalance = accountDao.getAccountByName(transaction.account)?.let { account ->
+            calculateAccountBalances(accountDao.getAllAccounts().first(), ledger)
+                .firstOrNull { it.account.id == account.id }?.currentBalance
+        } ?: 0.0
         val nowStamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
         auditDao.insertAuditLog(
             AuditLogEntity(
                 dateFormatted = nowStamp,
                 action = if (transaction.type == "MASUK") "INSERT_MASUK" else if (transaction.type == "KELUAR") "INSERT_KELUAR" else "TRANSFER",
                 recordId = transaction.id,
-                details = "${transaction.name} (${transaction.account}) sebesar Rp ${transaction.amount.toLong()} - Kategori: ${transaction.category}",
+                details = transaction.name + " (" + transaction.account + ") sebesar Rp " + transaction.amount.toLong() + " - Kategori: " + transaction.category,
                 user = transaction.inputBy,
                 verifiedFormulaStatus = "RECORDED",
-                balanceAfter = 0.0
+                balanceAfter = postBalance
             )
         )
+    }
+
+    private fun requireIsoDate(value: String, field: String) {
+        require(value.matches(Regex("""\d{4}-\d{2}-\d{2}"""))) { field + " harus YYYY-MM-DD." }
+        val parser = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { isLenient = false }
+        require(runCatching { parser.parse(value) }.isSuccess) { field + " bukan tanggal kalender yang valid." }
+    }
+
+    private fun requireIsoTime(value: String, field: String) {
+        require(value.matches(Regex("""\d{2}:\d{2}:\d{2}"""))) { field + " harus HH:mm:ss." }
+        val parser = SimpleDateFormat("HH:mm:ss", Locale.US).apply { isLenient = false }
+        require(runCatching { parser.parse(value) }.isSuccess) { field + " bukan waktu yang valid." }
     }
 
     private suspend fun validateTransaction(transaction: TransactionEntity) {
+        require(transaction.id.isNotBlank()) { "ID transaksi wajib diisi." }
+        requireIsoDate(transaction.date, "Tanggal transaksi")
+        requireIsoTime(transaction.time, "Jam transaksi")
+        require(transaction.name.isNotBlank()) { "Nama transaksi wajib diisi." }
+        require(transaction.category.isNotBlank()) { "Kategori transaksi wajib diisi." }
+        require(transaction.allocation.isNotBlank()) { "Alokasi transaksi wajib diisi." }
+        require(transaction.pic.isNotBlank()) { "PIC transaksi wajib diisi." }
+        require(transaction.inputBy.isNotBlank()) { "Input Oleh transaksi wajib diisi." }
+        require(transaction.inputTime > 0L) { "Waktu input transaksi tidak valid." }
         require(transaction.amount.isFinite() && transaction.amount > 0.0) { "Nominal transaksi harus lebih besar dari Rp 0." }
         require(transaction.type in setOf("MASUK", "KELUAR", "TRANSFER")) { "Tipe transaksi tidak valid." }
         require(transaction.status in setOf("Selesai", "Draft", "Pending", "Batal", "Dihapus")) { "Status transaksi tidak valid." }
-        require(accountDao.getAccountByName(transaction.account)?.isActive == true) { "Akun ${transaction.account} tidak terdaftar atau nonaktif." }
-        if (transaction.type == "TRANSFER") {
-            val destination = transaction.toAccount?.takeIf { it.isNotBlank() }
-            require(destination != null) { "Akun tujuan transfer wajib diisi." }
-            require(!destination.equals(transaction.account, ignoreCase = true)) { "Akun asal dan tujuan transfer tidak boleh sama." }
-            require(accountDao.getAccountByName(destination) != null) { "Akun tujuan $destination tidak terdaftar." }
+        require(accountDao.getAccountByName(transaction.account)?.isActive == true) {
+            "Akun " + transaction.account + " tidak terdaftar atau nonaktif."
+        }
+        if (transaction.isArchived) {
+            require(transaction.archivedAt != null && transaction.archivedAt > 0L) { "Transaksi arsip harus memiliki waktu arsip." }
+            require(transaction.archivedBy?.isNotBlank() == true) { "Transaksi arsip harus memiliki pengarsip." }
         } else {
-            require(transaction.toAccount == null) { "Akun tujuan hanya boleh diisi untuk transfer." }
+            require(transaction.archivedAt == null && transaction.archivedBy == null) {
+                "Transaksi aktif tidak boleh memiliki metadata arsip."
+            }
+        }
+        if (transaction.type == "TRANSFER") {
+            val destination = transaction.toAccount?.trim()?.takeIf { it.isNotBlank() }
+            require(destination != null) { "Akun tujuan transfer wajib diisi." }
+            require(!destination.equals(transaction.account, ignoreCase = true)) {
+                "Akun asal dan tujuan transfer tidak boleh sama."
+            }
+            require(accountDao.getAccountByName(destination)?.isActive == true) {
+                "Akun tujuan " + destination + " tidak terdaftar atau nonaktif."
+            }
+        } else {
+            require(transaction.toAccount == null) {
+                "Akun tujuan hanya boleh diisi untuk transfer."
+            }
         }
     }
+
     suspend fun archiveTransaction(id: String, archivedBy: String = "Admin") {
-        transactionDao.archiveTransaction(id, System.currentTimeMillis(), archivedBy)
-        val nowStamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-        auditDao.insertAuditLog(
-            AuditLogEntity(
-                dateFormatted = nowStamp,
-                action = "ARCHIVE_TRANSACTION",
-                recordId = id,
-                details = "Transaksi dipindahkan ke Transaksi_Dihapus (Arsip)",
-                user = archivedBy,
-                verifiedFormulaStatus = "RECORDED"
+        database.withTransaction {
+            val current = transactionDao.getTransactionById(id)
+                ?: throw IllegalArgumentException("Transaksi " + id + " tidak ditemukan.")
+            require(!current.isArchived) { "Transaksi " + id + " sudah diarsipkan." }
+            require(archivedBy.isNotBlank()) { "Pengarsip wajib diisi." }
+            transactionDao.archiveTransaction(id, System.currentTimeMillis(), archivedBy)
+            auditDao.insertAuditLog(
+                AuditLogEntity(
+                    dateFormatted = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()),
+                    action = "ARCHIVE_TRANSACTION",
+                    recordId = id,
+                    details = "Transaksi dipindahkan ke Arsip tanpa menghapus histori ledger.",
+                    user = archivedBy,
+                    verifiedFormulaStatus = "RECORDED"
+                )
             )
-        )
+        }
     }
 
     suspend fun restoreTransaction(id: String) {
-        transactionDao.restoreTransaction(id)
-        val nowStamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-        auditDao.insertAuditLog(
-            AuditLogEntity(
-                dateFormatted = nowStamp,
-                action = "RESTORE_TRANSACTION",
-                recordId = id,
-                details = "Transaksi dipulihkan kembali ke buku ledger aktif",
-                user = "Admin",
-                verifiedFormulaStatus = "RECORDED"
+        database.withTransaction {
+            val current = transactionDao.getTransactionById(id)
+                ?: throw IllegalArgumentException("Transaksi " + id + " tidak ditemukan.")
+            require(current.isArchived) { "Transaksi " + id + " tidak sedang diarsipkan." }
+            validateTransaction(current.copy(isArchived = false, archivedAt = null, archivedBy = null))
+            transactionDao.restoreTransaction(id)
+            auditDao.insertAuditLog(
+                AuditLogEntity(
+                    dateFormatted = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()),
+                    action = "RESTORE_TRANSACTION",
+                    recordId = id,
+                    details = "Transaksi dipulihkan kembali ke ledger aktif.",
+                    user = "Admin",
+                    verifiedFormulaStatus = "RECORDED"
+                )
             )
-        )
+        }
     }
 
-    suspend fun permanentlyDeleteTransaction(id: String) {
-        transactionDao.permanentlyDelete(id)
-        val nowStamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-        auditDao.insertAuditLog(
-            AuditLogEntity(
-                dateFormatted = nowStamp,
-                action = "PERMANENT_DELETE",
-                recordId = id,
-                details = "Transaksi dihapus permanen dari basis data",
-                user = "Admin",
-                verifiedFormulaStatus = "RECORDED"
-            )
-        )
-    }
+    suspend fun permanentlyDeleteTransaction(id: String): Nothing =
+        error("Penghapusan permanen transaksi dinonaktifkan untuk menjaga histori ledger.")
 
-    suspend fun emptyTrash() {
-        transactionDao.emptyTrash()
-        val nowStamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-        auditDao.insertAuditLog(
-            AuditLogEntity(
-                dateFormatted = nowStamp,
-                action = "EMPTY_TRASH",
-                recordId = "TRASH-ALL",
-                details = "Seluruh arsip transaksi dibersihkan permanen",
-                user = "Admin",
-                verifiedFormulaStatus = "RECORDED"
-            )
-        )
-    }
+    suspend fun emptyTrash(): Nothing =
+        error("Pengosongan arsip permanen dinonaktifkan untuk menjaga histori ledger.")
 
     suspend fun saveAccount(account: AccountEntity) {
         require(account.name.isNotBlank()) { "Nama akun wajib diisi." }
         require(account.type in setOf("Kas", "Bank", "E-Wallet", "Lainnya")) { "Jenis akun tidak valid." }
         require(account.initialBalance.isFinite() && account.initialBalance >= 0.0) { "Saldo awal akun tidak valid." }
+        require(accountDao.getAccountById(account.id) == null) { "ID akun " + account.id + " sudah digunakan." }
         val existing = accountDao.getAccountByName(account.name.trim())
-        require(existing == null || existing.id == account.id) { "Nama akun sudah digunakan." }
+        require(existing == null) { "Nama akun sudah digunakan." }
         accountDao.insertAccount(account.copy(name = account.name.trim()))
     }
 
     suspend fun bulkMarkAllEmployeesHadir(date: String) {
-        val allEmployees = employeeDao.getAllEmployeesList()
-        val nowStamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-        allEmployees.forEach { emp ->
-            val existing = attendanceDao.getAttendanceByEmployeeAndDate(emp.id, date)
-            if (existing == null) {
-                val attId = "ATT-${date.replace("-", "")}-${emp.id}"
-                attendanceDao.insertAttendance(
-                    AttendanceEntity(
-                        id = attId,
-                        employeeId = emp.id,
-                        employeeName = emp.name,
-                        department = emp.department,
-                        date = date,
-                        timeIn = "08:00",
-                        timeOut = "17:00",
-                        status = "Hadir",
-                        overtimeHours = 0.0,
-                        dailyAllowance = emp.dailyRate,
-                        notes = "Absensi tepat waktu"
+        database.withTransaction {
+            requireIsoDate(date, "Tanggal absensi")
+            val allEmployees = employeeDao.getAllEmployeesList()
+            allEmployees.forEach { emp ->
+                if (attendanceDao.getAttendanceByEmployeeAndDate(emp.id, date) == null) {
+                    attendanceDao.insertAttendance(
+                        AttendanceEntity(
+                            id = "ATT-" + date.replace("-", "") + "-" + emp.id,
+                            employeeId = emp.id,
+                            employeeName = emp.name,
+                            department = emp.department,
+                            date = date,
+                            timeIn = "08:00",
+                            timeOut = "17:00",
+                            status = "Hadir",
+                            overtimeHours = 0.0,
+                            dailyAllowance = emp.dailyRate,
+                            notes = "Absensi tepat waktu"
+                        )
                     )
-                )
+                }
             }
-        }
-        auditDao.insertAuditLog(
-            AuditLogEntity(
-                dateFormatted = nowStamp,
-                action = "BULK_ATTENDANCE",
-                recordId = "ATT-BULK-$date",
-                details = "Pencatatan absensi cepat untuk seluruh karyawan hadir pada tanggal $date",
-                user = "Admin Absensi",
-                verifiedFormulaStatus = "RECORDED"
+            auditDao.insertAuditLog(
+                AuditLogEntity(
+                    dateFormatted = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()),
+                    action = "BULK_ATTENDANCE",
+                    recordId = "ATT-BULK-" + date,
+                    details = "Pencatatan absensi cepat untuk seluruh karyawan hadir pada tanggal " + date,
+                    user = "Admin Absensi",
+                    verifiedFormulaStatus = "RECORDED"
+                )
             )
-        )
+        }
     }
 
-    suspend fun deleteAccount(id: String) {
-        database.withTransaction {
+    suspend fun deleteAccount(id: String): Boolean {
+        return database.withTransaction {
             val account = accountDao.getAccountById(id)
-                ?: throw IllegalArgumentException("Akun $id tidak ditemukan.")
-            val references = (
-                transactionDao.countReferencesToAccount(account.name) +
-                    receivableDao.countReferencesToAccount(account.name) +
-                    bankReconDao.countReferencesToAccount(account.name)
-            )
+                ?: throw IllegalArgumentException("Akun " + id + " tidak ditemukan.")
+            val references = transactionDao.countReferencesToAccount(account.name) +
+                receivableDao.countReferencesToAccount(account.name) +
+                bankReconDao.countReferencesToAccount(account.name)
             val nowStamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
             if (references > 0) {
                 accountDao.updateAccount(account.copy(isActive = false))
-                auditDao.insertAuditLog(
-                    AuditLogEntity(
-                        dateFormatted = nowStamp,
-                        action = "DEACTIVATE_ACCOUNT",
-                        recordId = account.id,
-                        details = "Akun ${account.name} dinonaktifkan karena masih memiliki $references referensi ledger/master.",
-                        user = "Admin",
-                        verifiedFormulaStatus = "RECORDED"
-                    )
-                )
+                auditDao.insertAuditLog(AuditLogEntity(
+                    dateFormatted = nowStamp,
+                    action = "DEACTIVATE_ACCOUNT",
+                    recordId = account.id,
+                    details = "Akun " + account.name + " dinonaktifkan karena masih memiliki " + references + " referensi ledger/master.",
+                    user = "Admin",
+                    verifiedFormulaStatus = "RECORDED"
+                ))
+                false
             } else {
                 accountDao.deleteAccount(id)
-                auditDao.insertAuditLog(
-                    AuditLogEntity(
-                        dateFormatted = nowStamp,
-                        action = "DELETE_ACCOUNT",
-                        recordId = account.id,
-                        details = "Akun ${account.name} dihapus karena tidak memiliki referensi data.",
-                        user = "Admin",
-                        verifiedFormulaStatus = "RECORDED"
-                    )
-                )
+                auditDao.insertAuditLog(AuditLogEntity(
+                    dateFormatted = nowStamp,
+                    action = "DELETE_ACCOUNT",
+                    recordId = account.id,
+                    details = "Akun " + account.name + " dihapus karena tidak memiliki referensi data.",
+                    user = "Admin",
+                    verifiedFormulaStatus = "RECORDED"
+                ))
+                true
             }
         }
     }
@@ -319,12 +352,14 @@ class KasRepository(
     }
 
     suspend fun saveReceivable(receivable: ReceivableEntity) {
+        require(receivableDao.getReceivableById(receivable.id) == null) { "ID tagihan " + receivable.id + " sudah digunakan." }
         require(receivable.type in setOf("PIUTANG", "HUTANG")) { "Jenis tagihan tidak valid." }
         require(receivable.customerName.isNotBlank()) { "Nama pihak wajib diisi." }
-        require(receivable.date.matches(Regex("""\d{4}-\d{2}-\d{2}"""))) { "Tanggal pencatatan harus YYYY-MM-DD." }
+        requireIsoDate(receivable.date, "Tanggal pencatatan")
         require(receivable.totalAmount.isFinite() && receivable.totalAmount > 0.0) { "Nominal tagihan harus lebih besar dari Rp 0." }
         require(receivable.paidAmount.isFinite() && receivable.paidAmount >= 0.0 && receivable.paidAmount <= receivable.totalAmount) { "Nominal pembayaran tagihan tidak valid." }
-        require(receivable.dueDate.matches(Regex("""\d{4}-\d{2}-\d{2}"""))) { "Tanggal jatuh tempo harus YYYY-MM-DD." }
+        requireIsoDate(receivable.dueDate, "Tanggal jatuh tempo")
+        require(receivable.status in setOf("Belum Jatuh Tempo", "Jatuh Tempo", "Lunas")) { "Status tagihan tidak valid." }
         require(accountDao.getAccountByName(receivable.targetAccount)?.isActive == true) { "Akun terkait tidak terdaftar atau nonaktif." }
         val normalizedStatus = if (receivable.paidAmount >= receivable.totalAmount) "Lunas" else receivable.status
         receivableDao.insertReceivable(receivable.copy(status = normalizedStatus))
@@ -433,36 +468,34 @@ class KasRepository(
         employeeDao.insertEmployee(employee)
     }
 
-    suspend fun deleteEmployee(id: String) {
-        database.withTransaction {
+    suspend fun deleteEmployee(id: String): Boolean {
+        return database.withTransaction {
             val employee = employeeDao.getEmployeeById(id)
-                ?: throw IllegalArgumentException("Karyawan $id tidak ditemukan.")
+                ?: throw IllegalArgumentException("Karyawan " + id + " tidak ditemukan.")
             val references = attendanceDao.countReferencesToEmployee(id)
             val nowStamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
             if (references > 0) {
                 employeeDao.updateEmployee(employee.copy(isActive = false))
-                auditDao.insertAuditLog(
-                    AuditLogEntity(
-                        dateFormatted = nowStamp,
-                        action = "DEACTIVATE_EMPLOYEE",
-                        recordId = employee.id,
-                        details = "Karyawan ${employee.name} dinonaktifkan karena memiliki $references catatan absensi.",
-                        user = "Admin",
-                        verifiedFormulaStatus = "RECORDED"
-                    )
-                )
+                auditDao.insertAuditLog(AuditLogEntity(
+                    dateFormatted = nowStamp,
+                    action = "DEACTIVATE_EMPLOYEE",
+                    recordId = employee.id,
+                    details = "Karyawan " + employee.name + " dinonaktifkan karena memiliki " + references + " catatan absensi.",
+                    user = "Admin",
+                    verifiedFormulaStatus = "RECORDED"
+                ))
+                false
             } else {
                 employeeDao.deleteEmployee(id)
-                auditDao.insertAuditLog(
-                    AuditLogEntity(
-                        dateFormatted = nowStamp,
-                        action = "DELETE_EMPLOYEE",
-                        recordId = employee.id,
-                        details = "Karyawan ${employee.name} dihapus karena tidak memiliki catatan absensi.",
-                        user = "Admin",
-                        verifiedFormulaStatus = "RECORDED"
-                    )
-                )
+                auditDao.insertAuditLog(AuditLogEntity(
+                    dateFormatted = nowStamp,
+                    action = "DELETE_EMPLOYEE",
+                    recordId = employee.id,
+                    details = "Karyawan " + employee.name + " dihapus karena tidak memiliki catatan absensi.",
+                    user = "Admin",
+                    verifiedFormulaStatus = "RECORDED"
+                ))
+                true
             }
         }
     }
@@ -480,24 +513,35 @@ class KasRepository(
         attendanceDao.getAttendancesByPeriod(start, end)
 
     suspend fun saveAttendance(attendance: AttendanceEntity) {
-        require(attendance.employeeId.isNotBlank()) { "ID karyawan wajib diisi." }
-        require(employeeDao.getEmployeeById(attendance.employeeId) != null) { "Karyawan tidak ditemukan." }
-        require(attendance.date.matches(Regex("""\d{4}-\d{2}-\d{2}"""))) { "Tanggal absensi harus YYYY-MM-DD." }
-        require(attendance.status in setOf("Hadir", "Izin", "Sakit", "Alpa", "Cuti")) { "Status absensi tidak valid." }
-        require(attendance.overtimeHours.isFinite() && attendance.overtimeHours >= 0.0) { "Jam lembur tidak valid." }
-        require(attendance.dailyAllowance.isFinite() && attendance.dailyAllowance >= 0.0) { "Uang harian tidak valid." }
-        attendanceDao.insertAttendance(attendance)
-        val nowStamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-        auditDao.insertAuditLog(
-            AuditLogEntity(
-                dateFormatted = nowStamp,
+        database.withTransaction {
+            require(attendanceDao.getAttendanceById(attendance.id) == null) {
+                "ID absensi " + attendance.id + " sudah digunakan."
+            }
+            require(attendance.employeeId.isNotBlank()) { "ID karyawan wajib diisi." }
+            require(employeeDao.getEmployeeById(attendance.employeeId) != null) { "Karyawan tidak ditemukan." }
+            requireIsoDate(attendance.date, "Tanggal absensi")
+            require(attendance.status in setOf("Hadir", "Izin", "Sakit", "Alpa", "Cuti")) {
+                "Status absensi tidak valid."
+            }
+            require(attendance.overtimeHours.isFinite() && attendance.overtimeHours >= 0.0) {
+                "Jam lembur tidak valid."
+            }
+            require(attendance.dailyAllowance.isFinite() && attendance.dailyAllowance >= 0.0) {
+                "Uang harian tidak valid."
+            }
+            require(attendanceDao.getAttendanceByEmployeeAndDate(attendance.employeeId, attendance.date) == null) {
+                "Absensi " + attendance.employeeId + " pada " + attendance.date + " sudah ada."
+            }
+            attendanceDao.insertAttendance(attendance)
+            auditDao.insertAuditLog(AuditLogEntity(
+                dateFormatted = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()),
                 action = "ATTENDANCE_LOG",
                 recordId = attendance.id,
-                details = "Absensi ${attendance.employeeName} (${attendance.status}) pada ${attendance.date}",
+                details = "Absensi " + attendance.employeeName + " (" + attendance.status + ") pada " + attendance.date,
                 user = "Admin Absensi",
                 verifiedFormulaStatus = "RECORDED"
-            )
-        )
+            ))
+        }
     }
 
     suspend fun deleteAttendance(id: String) {
@@ -1231,6 +1275,30 @@ class KasRepository(
             }
 
             database.withTransaction {
+                val existingAccountIds = accountDao.getAllAccounts().first().map { it.id }.toSet()
+                val existingTransactionIds = (transactionDao.getAllActiveTransactions().first() + transactionDao.getArchivedTransactions().first()).map { it.id }.toSet()
+                val existingReceivableIds = receivableDao.getAllReceivables().first().map { it.id }.toSet()
+                val existingEmployeeIds = employeeDao.getAllEmployees().first().map { it.id }.toSet()
+                val existingAttendanceIds = attendanceDao.getAllAttendances().first().map { it.id }.toSet()
+                val existingReconIds = bankReconDao.getAllReconciliations().first().map { it.id }.toSet()
+                val existingBudgetIds = budgetDao.getAllBudgets().first().map { it.id }.filter { it != 0L }.toSet()
+                val existingNoteIds = noteDao.getAllNotes().first().map { it.id }.filter { it != 0L }.toSet()
+
+                require(accounts.map { it.id }.distinct().size == accounts.size) { "Backup memiliki ID akun duplikat." }
+                require(accounts.none { it.id in existingAccountIds }) { "Backup memiliki ID akun yang sudah ada di database." }
+                require(transactions.map { it.id }.distinct().size == transactions.size) { "Backup memiliki ID transaksi duplikat." }
+                require(transactions.none { it.id in existingTransactionIds }) { "Backup memiliki ID transaksi yang sudah ada di database." }
+                require(receivables.map { it.id }.distinct().size == receivables.size) { "Backup memiliki ID tagihan duplikat." }
+                require(receivables.none { it.id in existingReceivableIds }) { "Backup memiliki ID tagihan yang sudah ada di database." }
+                require(employees.map { it.id }.distinct().size == employees.size) { "Backup memiliki ID karyawan duplikat." }
+                require(employees.none { it.id in existingEmployeeIds }) { "Backup memiliki ID karyawan yang sudah ada di database." }
+                require(attendances.map { it.id }.distinct().size == attendances.size) { "Backup memiliki ID absensi duplikat." }
+                require(attendances.none { it.id in existingAttendanceIds }) { "Backup memiliki ID absensi yang sudah ada di database." }
+                require(recons.map { it.id }.distinct().size == recons.size) { "Backup memiliki ID rekonsiliasi duplikat." }
+                require(recons.none { it.id in existingReconIds }) { "Backup memiliki ID rekonsiliasi yang sudah ada di database." }
+                require(budgets.all { it.id == 0L || it.id !in existingBudgetIds }) { "Backup memiliki ID anggaran yang sudah ada di database." }
+                require(notes.all { it.id == 0L || it.id !in existingNoteIds }) { "Backup memiliki ID catatan yang sudah ada di database." }
+
                 val seenAccountNames = mutableSetOf<String>()
                 accounts.forEach { account ->
                     require(account.name.isNotBlank()) { "Backup memiliki akun tanpa nama." }
@@ -1320,7 +1388,7 @@ class KasRepository(
                     require(audit.dateFormatted.isNotBlank() && audit.action.isNotBlank() && audit.recordId.isNotBlank()) { "Backup memiliki audit log yang tidak lengkap." }
                     require(audit.balanceAfter.isFinite()) { "Audit log ${audit.recordId} memiliki balanceAfter tidak valid." }
                 }
-                audits.forEach { auditDao.insertAuditLog(it) }
+                audits.forEach { auditDao.insertAuditLog(it.copy(id = 0L)) }
             }
 
             Result.success(transactions.size)

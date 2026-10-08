@@ -71,7 +71,7 @@ fun KasMasukScreen(
 
     var date by remember { mutableStateOf(todayStr) }
     var selectedAccount by remember { mutableStateOf(accounts.firstOrNull()?.name.orEmpty()) }
-    var transactionName by remember { mutableStateOf("Penjualan") }
+    var transactionName by remember { mutableStateOf("") }
     var selectedCategory by remember { mutableStateOf(viewModel.masterKategoriMasuk.first()) }
     var description by remember { mutableStateOf("") }
     var amountText by remember { mutableStateOf("") }
