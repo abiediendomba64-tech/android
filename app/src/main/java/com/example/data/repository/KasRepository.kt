@@ -270,15 +270,6 @@ class KasRepository(
         accountDao.insertAccount(account.copy(name = account.name.trim()))
     }
 
-    suspend fun saveAccount(account: AccountEntity) {
-        require(account.name.isNotBlank()) { "Nama akun wajib diisi." }
-        require(account.type in setOf("Kas", "Bank", "E-Wallet", "Lainnya")) { "Jenis akun tidak valid." }
-        require(account.initialBalance.isFinite() && account.initialBalance >= 0.0) { "Saldo awal akun tidak valid." }
-        val existing = accountDao.getAccountByName(account.name.trim())
-        require(existing == null || existing.id == account.id) { "Nama akun sudah digunakan." }
-        accountDao.insertAccount(account.copy(name = account.name.trim()))
-    }
-
     suspend fun bulkMarkAllEmployeesHadir(date: String) {
         database.withTransaction {
             requireIsoDate(date, "Tanggal absensi")
