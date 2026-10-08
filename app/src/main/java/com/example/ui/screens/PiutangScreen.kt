@@ -566,7 +566,6 @@ fun PiutangScreen(
         )
     }
 
-    // Modal Konfirmasi Hapus Asli (Bukan Fake)
     if (itemToDelete != null) {
         val toDel = itemToDelete!!
         AlertDialog(
