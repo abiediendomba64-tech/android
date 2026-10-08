@@ -6,11 +6,12 @@ on:
   pull_request:
     branches: ["main"]
 
+permissions:
+  contents: read
+
 jobs:
   build-test:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -27,5 +28,13 @@ jobs:
           gradle-version: "9.3.1"
           cache-provider: basic
 
-      - name: Build and unit test
-        run: gradle --no-daemon test assembleDebug
+      - name: Build, unit test, and assemble debug APK
+        run: gradle --no-daemon clean test assembleDebug
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v6
+        with:
+          name: sistem-kas-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
