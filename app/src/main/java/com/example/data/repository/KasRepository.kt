@@ -451,7 +451,10 @@ class KasRepository(
             require(accountDao.getAccountByName(accountName)?.isActive == true) {
                 "Akun pembayaran $accountName tidak terdaftar atau nonaktif."
             }
-            val duplicate = transactionDao.getAllActiveTransactions().first().any {
+            val duplicate = (
+                transactionDao.getAllActiveTransactions().first() +
+                    transactionDao.getArchivedTransactions().first()
+            ).any {
                 it.category == "Gaji" && it.receiptNo == "PAYROLL-$period"
             }
             require(!duplicate) { "Payroll periode $period sudah dicairkan; transaksi duplikat ditolak." }
