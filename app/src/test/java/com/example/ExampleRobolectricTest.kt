@@ -277,4 +277,56 @@ class ExampleRobolectricTest {
             assertTrue(e.message?.contains("melebihi sisa") == true)
         }
     }
+
+    @Test
+    fun spreadsheetExportUsesCompleteQuotedRoundTripFormat() {
+        val tx = TransactionEntity(
+            id = "TX-CSV-001",
+            type = "KELUAR",
+            date = "2026-10-07",
+            time = "10:00:00",
+            account = "Kas Tunai",
+            name = "Belanja, ATK",
+            category = "Operasional",
+            description = "Baris satu\nBaris dua",
+            amount = 1250000.5,
+            allocation = "Operasional",
+            pic = "Admin",
+            proofUrl = "https://example.test/a,b",
+            receiptNo = "INV/001",
+            project = "P-01",
+            note = "Catatan \"penting\"",
+            status = "Selesai",
+            inputTime = 1791344400123L,
+            inputBy = "Admin"
+        )
+        val csv = repository.exportTransactionsToCsv(listOf(tx))
+
+        assertTrue(csv.startsWith("\uFEFFID,Tipe,Tanggal"))
+        assertTrue(csv.contains("\"Belanja, ATK\""))
+        assertTrue(csv.contains("\"Baris satu\nBaris dua\""))
+        assertTrue(csv.contains("\"Catatan \"\"penting\"\"\""))
+        assertTrue(csv.contains("1250000.5"))
+        assertTrue(csv.contains("\"https://example.test/a,b\""))
+        assertTrue(csv.contains("TX-CSV-001"))
+    }
+
+    @Test
+    fun spreadsheetImportParsesQuotedCommaAndDecimalAndRejectsDuplicateId() = runBlocking {
+        db.accountDao().insertAccount(AccountEntity("csv-account", "Kas Tunai", "Kas", 0.0))
+
+        val csv = "\uFEFFID,Tipe,Tanggal,Jam,Akun,Ke Akun,Nama Transaksi,Kategori,Keterangan,Nominal,Alokasi,PIC,Bukti,No Bukti,Proyek,Catatan,Status,Waktu Input,Input Oleh,Diarsipkan,Waktu Arsip,Diarsipkan Oleh\n" +
+            "TX-CSV-IMPORT-001,KELUAR,2026-10-07,10:00:00,Kas Tunai,,\"Belanja, ATK\",Operasional,\"Keterangan, lengkap\",1.250.000,Operasional,Admin,,INV-001,P-01,\"Catatan \"\"A\"\"\",Selesai,2026-10-07 10:00:00.000,Admin,TIDAK,,\n"
+
+        val result = repository.importTransactionsFromCsv(csv)
+        assertTrue(result.isSuccess)
+        assertEquals(1, result.getOrNull())
+        assertEquals("Belanja, ATK", db.transactionDao().getTransactionById("TX-CSV-IMPORT-001")?.name)
+        assertEquals(1250000.0, db.transactionDao().getTransactionById("TX-CSV-IMPORT-001")?.amount ?: 0.0, 0.01)
+
+        val duplicate = repository.importTransactionsFromCsv(csv)
+        assertFalse(duplicate.isSuccess)
+        assertTrue(duplicate.exceptionOrNull()?.message?.contains("sudah ada") == true)
+    }
+
 }
