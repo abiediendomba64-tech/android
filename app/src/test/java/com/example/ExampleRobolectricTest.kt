@@ -431,6 +431,141 @@ class ExampleRobolectricTest {
     }
 
     @Test
+    fun attendanceDateValidationAcceptsIsoDate() = runBlocking {
+        db.employeeDao().insertEmployee(
+            EmployeeEntity(
+                id = "EMP-ATT-001",
+                name = "Tester",
+                position = "Staff",
+                department = "Operasional",
+                phone = ""
+            )
+        )
+        repository.saveAttendance(
+            AttendanceEntity(
+                id = "ATT-ISO-001",
+                employeeId = "EMP-ATT-001",
+                employeeName = "Tester",
+                department = "Operasional",
+                date = "2026-10-08",
+                timeIn = "08:00",
+                timeOut = "17:00",
+                status = "Hadir",
+                dailyAllowance = 0.0
+            )
+        )
+        assertNotNull(db.attendanceDao().getAttendanceByEmployeeAndDate("EMP-ATT-001", "2026-10-08"))
+    }
+
+    @Test
+    fun referencedAccountIsDeactivatedInsteadOfDeleted() = runBlocking {
+        db.accountDao().insertAccount(AccountEntity("acc-del-001", "Kas Referensi", "Kas", 0.0))
+        db.transactionDao().insertTransaction(
+            TransactionEntity(
+                id = "TX-REF-001",
+                type = "KELUAR",
+                date = "2026-10-08",
+                time = "10:00:00",
+                account = "Kas Referensi",
+                name = "Referensi",
+                category = "Operasional",
+                description = "",
+                amount = 1000.0,
+                status = "Selesai"
+            )
+        )
+
+        repository.deleteAccount("acc-del-001")
+
+        val account = db.accountDao().getAccountById("acc-del-001")
+        assertNotNull(account)
+        assertFalse(account?.isActive ?: true)
+        assertNotNull(db.transactionDao().getTransactionById("TX-REF-001"))
+    }
+
+    @Test
+    fun referencedEmployeeIsDeactivatedInsteadOfDeleted() = runBlocking {
+        db.employeeDao().insertEmployee(
+            EmployeeEntity(
+                id = "EMP-DEL-001",
+                name = "Karyawan Lama",
+                position = "Staff",
+                department = "Operasional",
+                phone = ""
+            )
+        )
+        db.attendanceDao().insertAttendance(
+            AttendanceEntity(
+                id = "ATT-REF-001",
+                employeeId = "EMP-DEL-001",
+                employeeName = "Karyawan Lama",
+                department = "Operasional",
+                date = "2026-10-08",
+                timeIn = "08:00",
+                timeOut = "17:00",
+                status = "Hadir"
+            )
+        )
+
+        repository.deleteEmployee("EMP-DEL-001")
+
+        val employee = db.employeeDao().getEmployeeById("EMP-DEL-001")
+        assertNotNull(employee)
+        assertFalse(employee?.isActive ?: true)
+        assertNotNull(db.attendanceDao().getAttendanceByEmployeeAndDate("EMP-DEL-001", "2026-10-08"))
+    }
+
+    @Test
+    fun invalidJsonRestoreIsAtomicAndDoesNotInsertPartialData() = runBlocking {
+        val backup = """
+            {
+              "accounts": [
+                {
+                  "id": "acc-restore-001",
+                  "name": "Kas Restore",
+                  "type": "Kas",
+                  "initialBalance": 100000,
+                  "colorHex": "#1E56A0",
+                  "isActive": true
+                }
+              ],
+              "transactions": [
+                {
+                  "id": "TX-RESTORE-BAD",
+                  "type": "KELUAR",
+                  "date": "08-10-2026",
+                  "time": "10:00:00",
+                  "account": "Kas Restore",
+                  "toAccount": null,
+                  "name": "Invalid Date",
+                  "category": "Operasional",
+                  "description": "",
+                  "amount": 1000,
+                  "allocation": "Operasional",
+                  "pic": "Admin",
+                  "proofUrl": "",
+                  "receiptNo": "",
+                  "project": "",
+                  "note": "",
+                  "status": "Selesai",
+                  "inputTime": 1791434400000,
+                  "inputBy": "Admin",
+                  "isArchived": false,
+                  "archivedAt": null,
+                  "archivedBy": null
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val result = repository.restoreDataFromJson(backup)
+
+        assertFalse(result.isSuccess)
+        assertTrue(db.accountDao().getAccountById("acc-restore-001") == null)
+        assertTrue(db.transactionDao().getTransactionById("TX-RESTORE-BAD") == null)
+    }
+
+    @Test
     fun archivedTransactionStillContributesToLedgerBalance() = runBlocking {
         db.accountDao().insertAccount(AccountEntity("acc-1", "Kas Tunai", "Kas", 0.0))
         val tx = TransactionEntity("TX-ARCH-001", "MASUK", "2026-10-01", "10:00:00", "Kas Tunai", null, "Archived", "Penjualan", "", 500000.0, status = "Selesai")

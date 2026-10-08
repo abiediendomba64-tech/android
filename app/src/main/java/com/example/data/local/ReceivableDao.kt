@@ -27,4 +27,7 @@ interface ReceivableDao {
 
     @Query("DELETE FROM receivables WHERE id = :id")
     suspend fun deleteReceivable(id: String)
+
+    @Query("SELECT COUNT(*) FROM receivables WHERE LOWER(TRIM(targetAccount)) = LOWER(TRIM(:accountName))")
+    suspend fun countReferencesToAccount(accountName: String): Int
 }

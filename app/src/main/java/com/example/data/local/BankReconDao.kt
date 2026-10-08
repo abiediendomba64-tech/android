@@ -24,4 +24,7 @@ interface BankReconDao {
 
     @Query("DELETE FROM bank_reconciliations WHERE id = :id")
     suspend fun deleteReconciliation(id: String)
+
+    @Query("SELECT COUNT(*) FROM bank_reconciliations WHERE LOWER(TRIM(accountName)) = LOWER(TRIM(:accountName))")
+    suspend fun countReferencesToAccount(accountName: String): Int
 }

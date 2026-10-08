@@ -48,4 +48,11 @@ interface TransactionDao {
 
     @Query("SELECT COUNT(*) FROM transactions WHERE isArchived = 0")
     suspend fun countActiveTransactions(): Int
+
+    @Query(
+        "SELECT COUNT(*) FROM transactions " +
+            "WHERE LOWER(TRIM(account)) = LOWER(TRIM(:accountName)) " +
+            "OR (toAccount IS NOT NULL AND LOWER(TRIM(toAccount)) = LOWER(TRIM(:accountName)))"
+    )
+    suspend fun countReferencesToAccount(accountName: String): Int
 }
