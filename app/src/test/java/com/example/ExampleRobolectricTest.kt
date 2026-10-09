@@ -955,6 +955,20 @@ class ExampleRobolectricTest {
         db.receivableDao().insertReceivable(receivable)
         db.transactionDao().insertTransaction(
             TransactionEntity(
+                id = "TX-LEGACY-TRANSFER-INCOME",
+                type = "MASUK",
+                date = "2026-10-06",
+                time = "11:00:00",
+                account = "Kas Backup",
+                name = "Transfer lama",
+                category = "Transfer Masuk",
+                description = "Catatan data lama yang harus dipertahankan",
+                amount = 25000.0,
+                status = "Selesai"
+            )
+        )
+        db.transactionDao().insertTransaction(
+            TransactionEntity(
                 id = "TX-INACTIVE-ACCOUNT-HISTORY",
                 type = "MASUK",
                 date = "2026-10-06",
@@ -1021,6 +1035,15 @@ class ExampleRobolectricTest {
             assertTrue(restoredDb.noteDao().getAllNotes().first().any { it.project == project.name })
             assertNotNull(restoredDb.bankReconDao().getAllReconciliations().first().firstOrNull { it.id == "REC-INACTIVE-ACCOUNT" })
             assertNotNull(restoredDb.transactionDao().getTransactionById("TX-INACTIVE-ACCOUNT-HISTORY"))
+            val restoredAudit = restoredRepo.runIntegrityAudit(
+                accounts = restoredDb.accountDao().getAllAccounts().first(),
+                transactions = restoredDb.transactionDao().getAllActiveTransactions().first(),
+                budgets = restoredDb.budgetDao().getAllBudgets().first(),
+                receivables = restoredDb.receivableDao().getAllReceivables().first(),
+                employees = restoredDb.employeeDao().getAllEmployees().first(),
+                attendances = restoredDb.attendanceDao().getAllAttendances().first()
+            )
+            assertTrue(restoredAudit.issues.any { it.contains("Transfer Masuk tercatat sebagai pemasukan") })
         } finally {
             restoredDb.close()
         }
@@ -1211,6 +1234,56 @@ class ExampleRobolectricTest {
     }
 
     @Test
+    fun payrollDisbursementRejectsOverlappingPeriodsAndPreventsDoublePayment() = runBlocking {
+        db.accountDao().insertAccount(AccountEntity("acc-payroll-overlap", "Kas Payroll Overlap", "Kas", 5000000.0))
+        repository.savePayrollDisbursement(
+            period = "2026-10-05",
+            totalAmount = 100000.0,
+            accountName = "Kas Payroll Overlap",
+            allocationsByProject = mapOf("" to 100000.0)
+        )
+        try {
+            repository.savePayrollDisbursement(
+                period = "2026-10",
+                totalAmount = 500000.0,
+                accountName = "Kas Payroll Overlap",
+                allocationsByProject = mapOf("" to 500000.0)
+            )
+            throw AssertionError("Pembayaran harian dan bulanan yang bertumpang tindih harus ditolak.")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message?.contains("bertumpang tindih") == true)
+        }
+        val payrollTransactions = db.transactionDao().getAllActiveTransactions().first()
+            .filter { it.category == "Gaji" && it.receiptNo.startsWith("PAYROLL-") }
+        assertEquals(1, payrollTransactions.size)
+        assertEquals(100000.0, payrollTransactions.sumOf { it.amount }, 0.01)
+    }
+
+    @Test
+    fun duplicateBudgetScopeUpdatesTheExistingLineInsteadOfDoubleCounting() = runBlocking {
+        repository.saveBudget(BudgetEntity(
+            period = "2026-10",
+            category = "Gaji",
+            budgetAmount = 1000000.0,
+            notes = "Target awal",
+            project = "",
+            fundBucket = "PT"
+        ))
+        repository.saveBudget(BudgetEntity(
+            period = "2026-10",
+            category = "gaji",
+            budgetAmount = 750000.0,
+            notes = "Target terbaru",
+            project = "",
+            fundBucket = "pt"
+        ))
+        val budgets = db.budgetDao().getAllBudgets().first()
+        assertEquals(1, budgets.size)
+        assertEquals(750000.0, budgets.single().budgetAmount, 0.01)
+        assertEquals("Target terbaru", budgets.single().notes)
+    }
+
+    @Test
     fun attendanceCannotBeDeletedAfterItsMonthlyPayrollWasDisbursed() = runBlocking {
         db.accountDao().insertAccount(AccountEntity("acc-payroll-lock", "Kas Gaji", "Kas", 1000000.0))
         val employee = EmployeeEntity(
@@ -1228,13 +1301,13 @@ class ExampleRobolectricTest {
             employeeId = employee.id,
             employeeName = employee.name,
             department = employee.department,
-            date = "2026-10-05",
+            date = "2026-11-05",
             status = "Hadir",
             dailyAllowance = 100000.0
         )
         repository.saveAttendance(attendance)
         repository.savePayrollDisbursement(
-            period = "2026-10",
+            period = "2026-10-01-2026-11-15",
             totalAmount = 3100000.0,
             accountName = "Kas Gaji",
             allocationsByProject = mapOf("" to 3100000.0)
@@ -1243,7 +1316,7 @@ class ExampleRobolectricTest {
             repository.deleteAttendance(attendance.id)
             throw AssertionError("Absensi periode payroll tertutup tidak boleh dihapus.")
         } catch (e: IllegalArgumentException) {
-            assertTrue(e.message?.contains("payroll periode 2026-10 sudah dicairkan") == true)
+            assertTrue(e.message?.contains("termasuk periode payroll 2026-10-01-2026-11-15") == true)
         }
         assertNotNull(db.attendanceDao().getAttendanceById(attendance.id))
     }

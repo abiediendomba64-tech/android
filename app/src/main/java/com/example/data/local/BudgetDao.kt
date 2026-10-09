@@ -16,6 +16,20 @@ interface BudgetDao {
     @Query("SELECT * FROM budgets WHERE period = :period ORDER BY category ASC")
     fun getBudgetsByPeriod(period: String): Flow<List<BudgetEntity>>
 
+    @Query(
+        "SELECT * FROM budgets WHERE period = :period " +
+            "AND LOWER(TRIM(category)) = LOWER(TRIM(:category)) " +
+            "AND LOWER(TRIM(project)) = LOWER(TRIM(:project)) " +
+            "AND LOWER(TRIM(fundBucket)) = LOWER(TRIM(:fundBucket)) " +
+            "ORDER BY id ASC"
+    )
+    suspend fun getMatchingBudgets(
+        period: String,
+        category: String,
+        project: String,
+        fundBucket: String
+    ): List<BudgetEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertBudget(budget: BudgetEntity)
 

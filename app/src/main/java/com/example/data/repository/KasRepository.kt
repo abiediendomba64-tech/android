@@ -186,7 +186,8 @@ class KasRepository(
 
     private suspend fun validateTransaction(
         transaction: TransactionEntity,
-        allowInactiveAccountReferences: Boolean = false
+        allowInactiveAccountReferences: Boolean = false,
+        allowLegacyTransferIncome: Boolean = false
     ) {
         require(transaction.id.isNotBlank()) { "ID transaksi wajib diisi." }
         requireIsoDate(transaction.date, "Tanggal transaksi")
@@ -200,7 +201,7 @@ class KasRepository(
         require(transaction.inputTime > 0L) { "Waktu input transaksi tidak valid." }
         require(transaction.amount.isFinite() && transaction.amount > 0.0) { "Nominal transaksi harus lebih besar dari Rp 0." }
         require(transaction.type in setOf("MASUK", "KELUAR", "TRANSFER")) { "Tipe transaksi tidak valid." }
-        require(!(transaction.type == "MASUK" && transaction.category.equals("Transfer Masuk", ignoreCase = true))) {
+        require(allowLegacyTransferIncome || !(transaction.type == "MASUK" && transaction.category.equals("Transfer Masuk", ignoreCase = true))) {
             "Transfer antar akun harus dicatat melalui menu Transfer agar tidak dihitung sebagai pendapatan."
         }
         require(transaction.status in setOf("Selesai", "Draft", "Pending", "Batal", "Dihapus")) { "Status transaksi tidak valid." }
@@ -479,12 +480,30 @@ class KasRepository(
     }
 
     suspend fun saveBudget(budget: BudgetEntity) {
-        require(budget.period.equals("All", ignoreCase = true) || budget.period.matches(Regex("""\d{4}-\d{2}"""))) { "Periode anggaran harus YYYY-MM atau All." }
-        require(budget.category.isNotBlank()) { "Kategori anggaran wajib diisi." }
-        require(budget.budgetAmount.isFinite() && budget.budgetAmount >= 0.0) { "Nominal anggaran tidak valid." }
-        require(budget.fundBucket in setOf("PT", "Perdagangan", "Dana Talang", "Pribadi", "Darurat")) { "Kelompok dana tidak valid." }
-        if (budget.project.isNotBlank()) require(projectDao.getProjectByName(budget.project)?.isActive == true) { "Proyek anggaran tidak terdaftar atau nonaktif." }
-        budgetDao.insertBudget(budget.copy(project = budget.project.trim()))
+        val normalized = budget.copy(
+            category = budget.category.trim(),
+            project = budget.project.trim(),
+            fundBucket = budget.fundBucket.trim()
+        )
+        require(normalized.period.equals("All", ignoreCase = true) || normalized.period.matches(Regex("""\d{4}-\d{2}"""))) { "Periode anggaran harus YYYY-MM atau All." }
+        require(normalized.category.isNotBlank()) { "Kategori anggaran wajib diisi." }
+        require(normalized.budgetAmount.isFinite() && normalized.budgetAmount >= 0.0) { "Nominal anggaran tidak valid." }
+        require(normalized.fundBucket in setOf("PT", "Perdagangan", "Dana Talang", "Pribadi", "Darurat")) { "Kelompok dana tidak valid." }
+        if (normalized.project.isNotBlank()) require(projectDao.getProjectByName(normalized.project)?.isActive == true) { "Proyek anggaran tidak terdaftar atau nonaktif." }
+        database.withTransaction {
+            val matches = budgetDao.getMatchingBudgets(
+                normalized.period, normalized.category, normalized.project, normalized.fundBucket
+            )
+            if (matches.isEmpty()) {
+                budgetDao.insertBudget(normalized)
+            } else {
+                // Keep the most recently created line as the stable row, apply the new target,
+                // and remove duplicate lines that would otherwise multiply realization totals.
+                val keeper = matches.maxBy { it.id }
+                budgetDao.updateBudget(normalized.copy(id = keeper.id))
+                matches.filter { it.id != keeper.id }.forEach { budgetDao.deleteBudget(it.id) }
+            }
+        }
     }
 
     suspend fun deleteBudget(id: Long) {
@@ -729,9 +748,15 @@ class KasRepository(
         database.withTransaction {
             val attendance = attendanceDao.getAttendanceById(id)
                 ?: throw IllegalArgumentException("Catatan absensi $id tidak ditemukan.")
-            val period = attendance.date.take(7)
-            require(transactionDao.countByCategoryAndReceiptNo("Gaji", "PAYROLL-$period") == 0) {
-                "Absensi tanggal ${attendance.date} tidak dapat dihapus karena payroll periode $period sudah dicairkan. Catat koreksi sebagai transaksi penyesuaian."
+            val payrollTransactions = (transactionDao.getAllActiveTransactions().first() + transactionDao.getArchivedTransactions().first())
+                .filter { it.category == "Gaji" && it.status == "Selesai" && it.receiptNo.startsWith("PAYROLL-") }
+            val overlappingPayroll = payrollTransactions.firstOrNull { payrollTx ->
+                val paidPeriod = payrollTx.receiptNo.removePrefix("PAYROLL-")
+                val range = runCatching { payrollPeriodRange(paidPeriod) }.getOrNull()
+                range != null && attendance.date >= range.first && attendance.date <= range.second
+            }
+            require(overlappingPayroll == null) {
+                "Absensi tanggal ${attendance.date} tidak dapat dihapus karena termasuk periode payroll ${overlappingPayroll?.receiptNo?.removePrefix("PAYROLL-")} yang sudah dicairkan. Catat koreksi sebagai transaksi penyesuaian."
             }
             attendanceDao.deleteAttendance(id)
             auditDao.insertAuditLog(AuditLogEntity(
@@ -745,6 +770,34 @@ class KasRepository(
         }
     }
 
+    private fun payrollPeriodRange(period: String): Pair<String, String> {
+        val rangeMatch = Regex("""^(\d{4}-\d{2}-\d{2})-(\d{4}-\d{2}-\d{2})$""").matchEntire(period)
+        if (rangeMatch != null) {
+            val start = rangeMatch.groupValues[1]
+            val end = rangeMatch.groupValues[2]
+            requireIsoDate(start, "Tanggal mulai periode payroll")
+            requireIsoDate(end, "Tanggal akhir periode payroll")
+            require(end >= start) { "Tanggal akhir payroll tidak boleh lebih awal dari tanggal mulai." }
+            return start to end
+        }
+        if (period.matches(Regex("""\d{4}-\d{2}-\d{2}"""))) {
+            requireIsoDate(period, "Tanggal payroll")
+            return period to period
+        }
+        if (period.matches(Regex("""\d{4}-\d{2}"""))) {
+            requireIsoDate("$period-01", "Periode payroll")
+            return "$period-01" to periodEndDate(period)
+        }
+        if (period.matches(Regex("""\d{4}"""))) {
+            val start = "$period-01-01"
+            val end = "$period-12-31"
+            requireIsoDate(start, "Tahun payroll")
+            requireIsoDate(end, "Tahun payroll")
+            return start to end
+        }
+        throw IllegalArgumentException("Periode payroll harus berupa tanggal, YYYY-MM, YYYY, atau rentang tanggal YYYY-MM-DD-YYYY-MM-DD.")
+    }
+
     suspend fun savePayrollDisbursement(
         period: String,
         totalAmount: Double,
@@ -753,6 +806,7 @@ class KasRepository(
     ): String {
         require(totalAmount.isFinite() && totalAmount > 0.0) { "Total payroll harus lebih besar dari Rp 0." }
         require(period.isNotBlank()) { "Periode payroll wajib diisi." }
+        val requestedPayrollRange = payrollPeriodRange(period)
         require(allocationsByProject.isNotEmpty() && allocationsByProject.values.all { it.isFinite() && it >= 0.0 }) {
             "Alokasi payroll per proyek tidak valid."
         }
@@ -763,8 +817,18 @@ class KasRepository(
             require(accountDao.getAccountByName(accountName)?.isActive == true) {
                 "Akun pembayaran " + accountName + " tidak terdaftar atau nonaktif."
             }
-            val duplicate = transactionDao.countByCategoryAndReceiptNo("Gaji", "PAYROLL-$period") > 0
-            require(!duplicate) { "Payroll periode $period sudah dicairkan; transaksi duplikat ditolak." }
+            val previousPayrolls = (transactionDao.getAllActiveTransactions().first() + transactionDao.getArchivedTransactions().first())
+                .filter { it.category == "Gaji" && it.status == "Selesai" && it.receiptNo.startsWith("PAYROLL-") }
+            val overlappingPayroll = previousPayrolls.firstOrNull { previous ->
+                val previousPeriod = previous.receiptNo.removePrefix("PAYROLL-")
+                val previousRange = runCatching { payrollPeriodRange(previousPeriod) }.getOrNull()
+                previousRange != null &&
+                    requestedPayrollRange.first <= previousRange.second &&
+                    previousRange.first <= requestedPayrollRange.second
+            }
+            require(overlappingPayroll == null) {
+                "Periode payroll $period bertumpang tindih dengan payroll ${overlappingPayroll?.receiptNo?.removePrefix("PAYROLL-")} yang sudah dicairkan. Untuk mencegah pembayaran ganda, pencairan dibatalkan."
+            }
             val now = Date()
             var firstId = ""
             allocationsByProject.toSortedMap().forEach { (projectName, amount) ->
@@ -1846,7 +1910,7 @@ class KasRepository(
                 if (attendances.isNotEmpty()) attendanceDao.insertAttendances(attendances)
 
                 transactions.forEach { tx ->
-                    validateTransaction(tx, allowInactiveAccountReferences = true)
+                    validateTransaction(tx, allowInactiveAccountReferences = true, allowLegacyTransferIncome = true)
                     require(tx.date.matches(Regex("""\d{4}-\d{2}-\d{2}"""))) { "Tanggal transaksi ${tx.id} tidak valid." }
                     require(tx.time.matches(Regex("""\d{2}:\d{2}:\d{2}"""))) { "Jam transaksi ${tx.id} tidak valid." }
                     require(tx.name.isNotBlank() && tx.category.isNotBlank()) { "Transaksi " + tx.id + " tidak lengkap." }
