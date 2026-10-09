@@ -86,6 +86,11 @@ abstract class AppDatabase : RoomDatabase() {
          * balance zeroed rather than being deleted.
          */
         internal fun cleanupLegacySeedRows(database: SupportSQLiteDatabase) {
+            val hasLegacyBootstrapMarker = database.compileStatement(
+                "SELECT COUNT(*) FROM audit_logs WHERE action='INITIALIZE_SYSTEM' AND recordId='SYS-SETUP'"
+            ).simpleQueryForLong() > 0L
+            if (!hasLegacyBootstrapMarker) return
+
             database.execSQL(
                 "DELETE FROM attendances WHERE " +
                     "(employeeId='EMP-001' AND employeeName='Ahmad Fauzi' AND department='Keuangan' AND " +

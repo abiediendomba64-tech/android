@@ -184,7 +184,10 @@ class KasRepository(
         require(runCatching { parser.parse(value) }.isSuccess) { field + " bukan waktu yang valid." }
     }
 
-    private suspend fun validateTransaction(transaction: TransactionEntity) {
+    private suspend fun validateTransaction(
+        transaction: TransactionEntity,
+        allowInactiveAccountReferences: Boolean = false
+    ) {
         require(transaction.id.isNotBlank()) { "ID transaksi wajib diisi." }
         requireIsoDate(transaction.date, "Tanggal transaksi")
         requireIsoTime(transaction.time, "Jam transaksi")
@@ -201,7 +204,8 @@ class KasRepository(
             "Transfer antar akun harus dicatat melalui menu Transfer agar tidak dihitung sebagai pendapatan."
         }
         require(transaction.status in setOf("Selesai", "Draft", "Pending", "Batal", "Dihapus")) { "Status transaksi tidak valid." }
-        require(accountDao.getAccountByName(transaction.account)?.isActive == true) {
+        val sourceAccount = accountDao.getAccountByName(transaction.account)
+        require(sourceAccount != null && (sourceAccount.isActive || allowInactiveAccountReferences)) {
             "Akun " + transaction.account + " tidak terdaftar atau nonaktif."
         }
         if (transaction.project.isNotBlank()) {
@@ -223,7 +227,8 @@ class KasRepository(
             require(!destination.equals(transaction.account, ignoreCase = true)) {
                 "Akun asal dan tujuan transfer tidak boleh sama."
             }
-            require(accountDao.getAccountByName(destination)?.isActive == true) {
+            val destinationAccount = accountDao.getAccountByName(destination)
+            require(destinationAccount != null && (destinationAccount.isActive || allowInactiveAccountReferences)) {
                 "Akun tujuan " + destination + " tidak terdaftar atau nonaktif."
             }
         } else {
@@ -1785,7 +1790,7 @@ class KasRepository(
                 housingUnits.forEach { unit ->
                     val project = projectDao.getProjectByName(unit.project)
                         ?: throw IllegalArgumentException("Proyek unit backup tidak ditemukan: " + unit.project)
-                    require(project.category == "Perumahan" && project.isActive) { "Unit backup harus terkait proyek perumahan aktif." }
+                    require(project.category == "Perumahan") { "Unit backup harus terkait dengan master proyek perumahan." }
                     require(unit.businessModel == project.businessModel) { "Segmen unit backup berbeda dari segmen proyek." }
                     require(unit.unitCode.isNotBlank()) { "Kode unit backup wajib diisi." }
                     require(unit.landAreaM2.isFinite() && unit.landAreaM2 > 0.0) { "Luas tanah unit backup tidak valid." }
@@ -1813,7 +1818,7 @@ class KasRepository(
                     require(receivable.dueDate.matches(Regex("""\d{4}-\d{2}-\d{2}"""))) { "Jatuh tempo ${receivable.id} tidak valid." }
                     require(receivable.totalAmount.isFinite() && receivable.totalAmount > 0.0) { "Nominal tagihan ${receivable.id} tidak valid." }
                     require(receivable.paidAmount.isFinite() && receivable.paidAmount >= 0.0 && receivable.paidAmount <= receivable.totalAmount) { "Pembayaran tagihan ${receivable.id} tidak valid." }
-                    require(accountDao.getAccountByName(receivable.targetAccount)?.isActive == true) { "Akun tagihan ${receivable.id} tidak terdaftar atau nonaktif." }
+                    require(accountDao.getAccountByName(receivable.targetAccount) != null) { "Akun tagihan ${receivable.id} tidak terdaftar." }
                     require(receivable.fundBucket in setOf("PT", "Perdagangan", "Dana Talang", "Pribadi", "Darurat")) { "Kelompok dana tagihan backup tidak valid." }
                     if (receivable.project.isNotBlank()) require(projectDao.getProjectByName(receivable.project) != null) { "Proyek tagihan backup tidak ditemukan: " + receivable.project }
                 }
@@ -1841,7 +1846,7 @@ class KasRepository(
                 if (attendances.isNotEmpty()) attendanceDao.insertAttendances(attendances)
 
                 transactions.forEach { tx ->
-                    validateTransaction(tx)
+                    validateTransaction(tx, allowInactiveAccountReferences = true)
                     require(tx.date.matches(Regex("""\d{4}-\d{2}-\d{2}"""))) { "Tanggal transaksi ${tx.id} tidak valid." }
                     require(tx.time.matches(Regex("""\d{2}:\d{2}:\d{2}"""))) { "Jam transaksi ${tx.id} tidak valid." }
                     require(tx.name.isNotBlank() && tx.category.isNotBlank()) { "Transaksi " + tx.id + " tidak lengkap." }
@@ -1858,7 +1863,6 @@ class KasRepository(
                     require(recon.statementBalance.isFinite() && recon.statementBalance >= 0.0) { "Saldo rekening koran ${recon.id} tidak valid." }
                     val account = accountDao.getAccountByName(recon.accountName)
                         ?: throw IllegalArgumentException("Akun rekonsiliasi ${recon.id} tidak terdaftar.")
-                    require(account.isActive) { "Akun rekonsiliasi ${recon.id} nonaktif." }
                     val ledger = (transactionDao.getAllActiveTransactions().first() + transactionDao.getArchivedTransactions().first()).distinctBy { it.id }
                     val bookBalance = calculateAccountBalanceAtPeriod(account, recon.period, ledger)
                     val difference = recon.statementBalance - bookBalance
@@ -1872,7 +1876,7 @@ class KasRepository(
                     require(plan.title.isNotBlank()) { "Rencana backup tidak memiliki judul." }
                     require(plan.estimatedAmount.isFinite() && plan.estimatedAmount >= 0.0) { "Estimasi rencana backup tidak valid." }
                     require(plan.status in setOf("Direncanakan", "Selesai", "Batal")) { "Status rencana backup tidak valid." }
-                    if (plan.project.isNotBlank()) require(projectDao.getProjectByName(plan.project)?.isActive == true) { "Proyek rencana backup tidak ditemukan: " + plan.project }
+                    if (plan.project.isNotBlank()) require(projectDao.getProjectByName(plan.project) != null) { "Proyek rencana backup tidak ditemukan: " + plan.project }
                 }
                 projectPlans.forEach { projectPlanDao.insertPlan(it) }
 
@@ -1882,7 +1886,7 @@ class KasRepository(
                         require(note.title.isNotBlank()) { "Catatan ${note.id} tidak memiliki judul." }
                         require(note.priority in setOf("Rendah", "Sedang", "Tinggi")) { "Prioritas catatan ${note.id} tidak valid." }
                         require(note.status in setOf("Open", "Done", "Follow Up")) { "Status catatan " + note.id + " tidak valid." }
-                        if (note.project.isNotBlank()) require(projectDao.getProjectByName(note.project)?.isActive == true) { "Proyek catatan backup tidak ditemukan: " + note.project }
+                        if (note.project.isNotBlank()) require(projectDao.getProjectByName(note.project) != null) { "Proyek catatan backup tidak ditemukan: " + note.project }
                     }
                     noteDao.insertNotes(notes)
                 }

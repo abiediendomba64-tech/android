@@ -889,10 +889,34 @@ class ExampleRobolectricTest {
             budgetAmount = 1000000.0,
             status = "Berjalan",
             notes = "",
-            isActive = true,
+            isActive = false,
             createdAt = 1790812800000L
         )
         repository.saveProject(project)
+        db.projectPlanDao().insertPlan(
+            com.example.data.model.ProjectPlanEntity(
+                id = "PLAN-INACTIVE-PROJECT",
+                project = project.name,
+                planDate = "2026-10-15",
+                title = "Agenda historis proyek",
+                category = "Pembayaran",
+                estimatedAmount = 200000.0,
+                status = "Direncanakan",
+                details = "Agenda tetap dipertahankan setelah proyek dinonaktifkan",
+                createdAt = 1790812800000L
+            )
+        )
+        db.noteDao().insertNote(
+            com.example.data.model.CashNoteEntity(
+                date = "2026-10-05",
+                title = "Catatan proyek historis",
+                content = "Catatan tetap ditautkan ke proyek nonaktif",
+                project = project.name
+            )
+        )
+        db.budgetDao().insertBudget(
+            BudgetEntity(period = "2026-10", category = "Proyek", budgetAmount = 300000.0, project = project.name)
+        )
         val inactiveEmployee = EmployeeEntity(
             id = "EMP-BACKUP-INACTIVE",
             name = "Karyawan Nonaktif",
@@ -924,14 +948,39 @@ class ExampleRobolectricTest {
             description = "Piutang proyek perdagangan",
             totalAmount = 500000.0,
             dueDate = "2026-11-05",
-            targetAccount = "Kas Backup",
+            targetAccount = "Bank Lama",
             project = project.name,
             fundBucket = "Perdagangan"
         )
-        repository.saveReceivable(receivable)
+        db.receivableDao().insertReceivable(receivable)
+        db.transactionDao().insertTransaction(
+            TransactionEntity(
+                id = "TX-INACTIVE-ACCOUNT-HISTORY",
+                type = "MASUK",
+                date = "2026-10-06",
+                time = "10:00:00",
+                account = "Bank Lama",
+                name = "Histori sebelum akun dinonaktifkan",
+                category = "Penjualan",
+                description = "",
+                amount = 50000.0,
+                status = "Selesai"
+            )
+        )
+        db.bankReconDao().insertReconciliation(
+            BankReconEntity(
+                id = "REC-INACTIVE-ACCOUNT",
+                accountName = "Bank Lama",
+                period = "2026-10",
+                bookBalance = 300000.0,
+                statementBalance = 300000.0,
+                difference = 0.0,
+                status = "Cocok"
+            )
+        )
 
         val json = repository.exportDataToJson(
-            transactions = emptyList(),
+            transactions = db.transactionDao().getAllActiveTransactions().first(),
             accounts = db.accountDao().getAllAccounts().first(),
             budgets = db.budgetDao().getAllBudgets().first(),
             receivables = db.receivableDao().getAllReceivables().first(),
@@ -966,6 +1015,12 @@ class ExampleRobolectricTest {
             val restoredReceivable = restoredDb.receivableDao().getReceivableById(receivable.id)
             assertEquals(project.name, restoredReceivable?.project)
             assertEquals("Perdagangan", restoredReceivable?.fundBucket)
+            assertEquals("Bank Lama", restoredReceivable?.targetAccount)
+            assertEquals(false, restoredDb.projectDao().getProjectById(project.id)?.isActive)
+            assertEquals(project.name, restoredDb.projectPlanDao().getPlanById("PLAN-INACTIVE-PROJECT")?.project)
+            assertTrue(restoredDb.noteDao().getAllNotes().first().any { it.project == project.name })
+            assertNotNull(restoredDb.bankReconDao().getAllReconciliations().first().firstOrNull { it.id == "REC-INACTIVE-ACCOUNT" })
+            assertNotNull(restoredDb.transactionDao().getTransactionById("TX-INACTIVE-ACCOUNT-HISTORY"))
         } finally {
             restoredDb.close()
         }
