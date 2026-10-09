@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Domain
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.ListAlt
 import androidx.compose.material.icons.filled.Menu
@@ -82,6 +83,7 @@ import com.example.ui.screens.KasKeluarScreen
 import com.example.ui.screens.KasMasukScreen
 import com.example.ui.screens.LaporanScreen
 import com.example.ui.screens.PiutangScreen
+import com.example.ui.screens.ProyekScreen
 import com.example.ui.screens.RekonsiliasiArusKasScreen
 import com.example.ui.screens.TransaksiAllScreen
 import com.example.ui.screens.TransferScreen
@@ -113,7 +115,8 @@ enum class Screen(val title: String, val icon: ImageVector) {
     AUDIT_LOG("Audit Trail & Sistem", Icons.Default.Policy),
     BACKUP("Cadangan & Pulihkan", Icons.Default.Security),
     ARSIP("Transaksi Dihapus", Icons.Default.Delete),
-    AKUN_KATEGORI("Master Akun & Dropdown", Icons.Default.AccountBalance)
+    AKUN_KATEGORI("Master Akun & Dropdown", Icons.Default.AccountBalance),
+    PROYEK("Proyek & Usaha", Icons.Default.Domain)
 }
 
 class MainActivity : ComponentActivity() {
@@ -196,6 +199,7 @@ fun MainApp() {
                 DrawerItem(Screen.REKONSILIASI, currentScreen) { currentScreen = it; scope.launch { drawerState.close() } }
                 DrawerItem(Screen.LAPORAN, currentScreen) { currentScreen = it; scope.launch { drawerState.close() } }
                 DrawerItem(Screen.ANGGARAN, currentScreen) { currentScreen = it; scope.launch { drawerState.close() } }
+                DrawerItem(Screen.PROYEK, currentScreen) { currentScreen = it; scope.launch { drawerState.close() } }
                 DrawerItem(Screen.PIUTANG, currentScreen) { currentScreen = it; scope.launch { drawerState.close() } }
                 DrawerItem(Screen.KALENDER, currentScreen) { currentScreen = it; scope.launch { drawerState.close() } }
                 DrawerItem(Screen.KALKULATOR, currentScreen) { currentScreen = it; scope.launch { drawerState.close() } }
@@ -320,6 +324,7 @@ fun MainApp() {
                     Screen.BACKUP -> BackupRestoreScreen(viewModel = kasViewModel)
                     Screen.ARSIP -> ArsipScreen(viewModel = kasViewModel)
                     Screen.AKUN_KATEGORI -> AkunKategoriScreen(viewModel = kasViewModel)
+                    Screen.PROYEK -> ProyekScreen(viewModel = kasViewModel)
                 }
             }
         }

@@ -48,10 +48,14 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.KasViewModel
 import com.example.ui.components.EmptyStateView
 import com.example.ui.components.FormDropdown
+import com.example.ui.components.IsoDatePickerField
 import com.example.ui.components.formatDateIndo
 import com.example.ui.theme.ExpenseRed
 import com.example.ui.theme.IncomeGreen
 import com.example.ui.theme.PrimaryBlue
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun CatatanScreen(
@@ -59,6 +63,7 @@ fun CatatanScreen(
     modifier: Modifier = Modifier
 ) {
     val notes by viewModel.notes.collectAsStateWithLifecycle()
+    val projects by viewModel.activeProjects.collectAsStateWithLifecycle()
     var showAddDialog by remember { mutableStateOf(false) }
 
     var titleInput by remember { mutableStateOf("") }
@@ -66,6 +71,8 @@ fun CatatanScreen(
     var picInput by remember { mutableStateOf(viewModel.masterPic.first()) }
     var priorityInput by remember { mutableStateOf("Sedang") }
     var statusInput by remember { mutableStateOf("Open") }
+    var dateInput by remember { mutableStateOf(SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())) }
+    var selectedProject by remember { mutableStateOf("") }
 
     Scaffold(
         floatingActionButton = {
@@ -207,7 +214,7 @@ fun CatatanScreen(
                                     color = MaterialTheme.colorScheme.outline
                                 )
                                 Text(
-                                    text = formatDateIndo(note.date),
+                                    text = formatDateIndo(note.date) + if (note.project.isNotBlank()) " • " + note.project else "",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.outline
                                 )
@@ -229,6 +236,19 @@ fun CatatanScreen(
             title = { Text("Tambah Catatan Keuangan", fontWeight = FontWeight.Bold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    IsoDatePickerField(
+                        value = dateInput,
+                        label = "Tanggal agenda/catatan",
+                        onDateSelected = { dateInput = it },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    FormDropdown(
+                        label = "Proyek",
+                        selectedValue = selectedProject.ifBlank { "PT / Umum" },
+                        options = listOf("PT / Umum") + projects.map { it.name },
+                        onValueChange = { selectedProject = if (it == "PT / Umum") "" else it }
+                    )
                     OutlinedTextField(
                         value = titleInput,
                         onValueChange = { titleInput = it },
@@ -277,9 +297,11 @@ fun CatatanScreen(
                 Button(
                     onClick = {
                         if (titleInput.isNotBlank()) {
-                            viewModel.tambahCatatan(titleInput, contentInput, picInput, priorityInput, statusInput)
+                            viewModel.tambahCatatan(titleInput, contentInput, picInput, priorityInput, statusInput, dateInput, selectedProject)
                             titleInput = ""
                             contentInput = ""
+                            dateInput = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+                            selectedProject = ""
                             showAddDialog = false
                         }
                     }

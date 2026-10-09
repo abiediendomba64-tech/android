@@ -49,6 +49,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.KasViewModel
 import com.example.ui.components.EmptyStateView
 import com.example.ui.components.FormDropdown
+import com.example.ui.components.IsoDatePickerField
 import com.example.ui.components.TransactionRowItem
 import com.example.ui.components.formatRupiah
 import com.example.ui.theme.ExpenseRed
@@ -62,6 +63,7 @@ fun KasKeluarScreen(
     modifier: Modifier = Modifier
 ) {
     val accounts by viewModel.accounts.collectAsStateWithLifecycle()
+    val projects by viewModel.activeProjects.collectAsStateWithLifecycle()
     val transactions by viewModel.activeTransactions.collectAsStateWithLifecycle()
     val kasKeluarList = transactions.filter { it.type == "KELUAR" }
     val totalKeluar = kasKeluarList.filter { it.status == "Selesai" }.sumOf { it.amount }
@@ -79,6 +81,7 @@ fun KasKeluarScreen(
     var proofUrl by remember { mutableStateOf("") }
     var receiptNo by remember { mutableStateOf("") }
     var project by remember { mutableStateOf("") }
+    var fundBucket by remember { mutableStateOf("PT") }
     var note by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("Selesai") }
 
@@ -248,24 +251,11 @@ fun KasKeluarScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        OutlinedTextField(
+                                                IsoDatePickerField(
                             value = date,
-                            onValueChange = {
-                                date = it
-                                if (dateError != null) dateError = null
-                            },
-                            label = { Text("Tanggal *") },
-                            isError = dateError != null,
-                            supportingText = if (dateError != null) {
-                                { Text(dateError!!, color = MaterialTheme.colorScheme.error, fontSize = 11.sp) }
-                            } else null,
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("kk_date_input"),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedContainerColor = MaterialTheme.colorScheme.surface,
-                                unfocusedContainerColor = MaterialTheme.colorScheme.surface
-                            )
+                            label = "Tanggal *",
+                            onDateSelected = { date = it },
+                            modifier = Modifier.weight(1f).testTag("kk_date_input")
                         )
 
                         FormDropdown(
@@ -284,7 +274,27 @@ fun KasKeluarScreen(
                         )
                     }
 
-                    // Nama Transaksi & Kategori
+                                        // Proyek dan kelompok sumber dana untuk pemisahan laporan.
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        FormDropdown(
+                            label = "Proyek / Alokasi",
+                            selectedValue = project.ifBlank { "Umum / PT" },
+                            options = listOf("Umum / PT") + projects.map { it.name },
+                            onValueChange = { project = if (it == "Umum / PT") "" else it },
+                            modifier = Modifier.weight(1f)
+                        )
+                        FormDropdown(
+                            label = "Kelompok Dana",
+                            selectedValue = fundBucket,
+                            options = viewModel.masterFundBuckets,
+                            onValueChange = { fundBucket = it },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+// Nama Transaksi & Kategori
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -472,7 +482,8 @@ fun KasKeluarScreen(
                                     receiptNo = receiptNo.trim(),
                                     project = project.trim(),
                                     note = note.trim(),
-                                    status = status
+                                    status = status,
+                                    fundBucket = fundBucket
                                 ) {
                                     amountText = ""
                                     description = ""

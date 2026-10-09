@@ -15,6 +15,9 @@ import com.example.data.model.BudgetEntity
 import com.example.data.model.CashNoteEntity
 import com.example.data.model.EmployeeEntity
 import com.example.data.model.ReceivableEntity
+import com.example.data.model.ProjectEntity
+import com.example.data.model.ProjectPlanEntity
+import com.example.data.model.HousingUnitEntity
 import com.example.data.model.TransactionEntity
 import com.example.data.repository.AccountWithBalance
 import com.example.data.repository.AttendanceSummary
@@ -53,7 +56,10 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
             employeeDao = database.employeeDao(),
             attendanceDao = database.attendanceDao(),
             auditDao = database.auditDao(),
-            bankReconDao = database.bankReconDao()
+            bankReconDao = database.bankReconDao(),
+            projectDao = database.projectDao(),
+            projectPlanDao = database.projectPlanDao(),
+            housingUnitDao = database.housingUnitDao()
         )
     }
 
@@ -88,6 +94,18 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val bankReconciliations: StateFlow<List<BankReconEntity>> = repository.bankReconciliations
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val projects: StateFlow<List<ProjectEntity>> = repository.projects
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val activeProjects: StateFlow<List<ProjectEntity>> = repository.activeProjects
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val projectPlans: StateFlow<List<ProjectPlanEntity>> = repository.projectPlans
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val housingUnits: StateFlow<List<HousingUnitEntity>> = repository.housingUnits
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // Attendance Filter State
@@ -178,6 +196,13 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         "Selesai", "Draft", "Pending", "Batal"
     )
 
+    val masterFundBuckets = listOf("PT", "Perdagangan", "Dana Talang", "Pribadi", "Darurat")
+    val masterProjectCategories = listOf("Pembebasan Tanah", "Cut & Fill", "Perumahan", "Perdagangan", "Operasional PT", "Lainnya")
+    val masterProjectStatuses = listOf("Berjalan", "Ditunda", "Selesai")
+    val masterProjectPlanCategories = listOf("Rencana biaya", "Pembayaran", "Pembebasan tanah", "Cut & Fill", "Pembangunan unit", "Pemasaran", "Perizinan", "Lainnya")
+    val masterHousingUnitStatuses = listOf("Tersedia", "Booking", "Terjual", "Dibatalkan")
+
+
     // Settings state
     val companyName = MutableStateFlow("Sistem Kas")
 
@@ -196,6 +221,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         project: String = "",
         note: String = "",
         status: String = "Selesai",
+        fundBucket: String = "PT",
         onSuccess: () -> Unit = {}
     ) {
         viewModelScope.launch {
@@ -217,7 +243,8 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
                 receiptNo = receiptNo,
                 project = project,
                 note = note,
-                status = status
+                status = status,
+                fundBucket = fundBucket
             )
             repository.saveTransaction(tx)
             _snackBarMessage.emit("Kas Masuk tersimpan: $id (Tercatat dalam Log Audit)")
@@ -239,6 +266,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         project: String = "",
         note: String = "",
         status: String = "Selesai",
+        fundBucket: String = "PT",
         onSuccess: () -> Unit = {}
     ) {
         viewModelScope.launch {
@@ -260,7 +288,8 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
                 receiptNo = receiptNo,
                 project = project,
                 note = note,
-                status = status
+                status = status,
+                fundBucket = fundBucket
             )
             repository.saveTransaction(tx)
             _snackBarMessage.emit("Kas Keluar tersimpan: $id (Tercatat dalam Log Audit)")
@@ -279,6 +308,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         receiptNo: String = "",
         note: String = "",
         status: String = "Selesai",
+        fundBucket: String = "PT",
         onSuccess: () -> Unit = {}
     ) {
         viewModelScope.launch {
@@ -304,7 +334,8 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
                 proofUrl = proofUrl,
                 receiptNo = receiptNo,
                 note = note,
-                status = status
+                status = status,
+                fundBucket = fundBucket
             )
             repository.saveTransaction(tx)
             _snackBarMessage.emit("Transfer tersimpan: $id")
@@ -365,9 +396,16 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun tambahAnggaran(period: String, category: String, amount: Double, notes: String) {
+    fun tambahAnggaran(
+        period: String,
+        category: String,
+        amount: Double,
+        notes: String,
+        project: String = "",
+        fundBucket: String = "PT"
+    ) {
         viewModelScope.launch {
-            repository.saveBudget(BudgetEntity(period = period, category = category, budgetAmount = amount, notes = notes))
+            repository.saveBudget(BudgetEntity(period = period, category = category, budgetAmount = amount, notes = notes, project = project, fundBucket = fundBucket))
             _snackBarMessage.emit("Alokasi anggaran untuk $category ($period) berhasil disimpan.")
         }
     }
@@ -455,10 +493,17 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun tambahCatatan(title: String, content: String, pic: String, priority: String, status: String) {
+    fun tambahCatatan(
+        title: String,
+        content: String,
+        pic: String,
+        priority: String,
+        status: String,
+        date: String = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()),
+        project: String = ""
+    ) {
         viewModelScope.launch {
-            val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
-            repository.saveNote(CashNoteEntity(date = today, title = title, content = content, pic = pic, priority = priority, status = status))
+            repository.saveNote(CashNoteEntity(date = date, title = title, content = content, pic = pic, priority = priority, status = status, project = project))
             _snackBarMessage.emit("Catatan kas disimpan.")
         }
     }
@@ -477,11 +522,12 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         department: String,
         phone: String,
         dailyRate: Double,
-        monthlySalary: Double
+        monthlySalary: Double,
+        defaultProject: String = ""
     ) {
         viewModelScope.launch {
             val id = repository.generateId("EMP")
-            val emp = EmployeeEntity(id, name, position, department, phone, dailyRate, monthlySalary)
+            val emp = EmployeeEntity(id, name, position, department, phone, dailyRate, monthlySalary, true, defaultProject)
             repository.saveEmployee(emp)
             _snackBarMessage.emit("Data karyawan $name ($id) berhasil ditambahkan.")
         }
@@ -497,7 +543,8 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         status: String,
         overtime: Double,
         allowance: Double,
-        notes: String
+        notes: String,
+        project: String = ""
     ) {
         viewModelScope.launch {
             val id = "ATT-${date.replace("-", "")}-$employeeId"
@@ -512,7 +559,8 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
                 status = status,
                 overtimeHours = overtime,
                 dailyAllowance = allowance,
-                notes = notes
+                notes = notes,
+                project = project
             )
             repository.saveAttendance(att)
             _snackBarMessage.emit("Absensi $employeeName ($status) tanggal $date berhasil dicatat.")
@@ -591,14 +639,124 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         onSuccess: () -> Unit
     ) {
         viewModelScope.launch {
-            val payrollTotal = repository.calculatePayrollTotal(employees.value, filteredAttendances.value)
+            val allocationsByProject = repository.calculatePayrollAllocations(
+                employees = employees.value,
+                attendances = filteredAttendances.value
+            )
+            val payrollTotal = allocationsByProject.values.sum()
             require(totalGaji.isFinite() && totalGaji > 0.0) { "Total payroll harus lebih besar dari Rp 0." }
             require(kotlin.math.abs(payrollTotal - totalGaji) < 0.01) {
                 "Total pencairan payroll tidak sama dengan perhitungan slip; pencairan dibatalkan."
             }
-            repository.savePayrollDisbursement(period, payrollTotal, accountName)
+            repository.savePayrollDisbursement(period, payrollTotal, accountName, allocationsByProject)
             _snackBarMessage.emit("Payroll sebesar ${formatRupiah(payrollTotal)} berhasil dicairkan ke Kas Keluar.")
             onSuccess()
+        }
+    }
+
+
+    fun tambahProyek(
+        name: String,
+        category: String,
+        businessModel: String,
+        location: String,
+        startDate: String,
+        targetEndDate: String,
+        budgetAmount: Double,
+        notes: String
+    ) {
+        viewModelScope.launch {
+            val project = ProjectEntity(
+                id = repository.generateId("PRJ"),
+                name = name.trim(),
+                category = category,
+                businessModel = businessModel,
+                location = location.trim(),
+                startDate = startDate,
+                targetEndDate = targetEndDate,
+                budgetAmount = budgetAmount,
+                status = "Berjalan",
+                notes = notes.trim(),
+                isActive = true,
+                createdAt = System.currentTimeMillis()
+            )
+            repository.saveProject(project)
+            _snackBarMessage.emit("Proyek " + project.name + " berhasil disimpan.")
+        }
+    }
+
+    fun tambahRencana(
+        project: String,
+        date: String,
+        title: String,
+        category: String,
+        estimatedAmount: Double,
+        details: String
+    ) {
+        viewModelScope.launch {
+            val plan = ProjectPlanEntity(
+                id = repository.generateId("PLAN"),
+                project = project.trim(),
+                planDate = date,
+                title = title.trim(),
+                category = category,
+                estimatedAmount = estimatedAmount,
+                status = "Direncanakan",
+                details = details.trim(),
+                createdAt = System.currentTimeMillis()
+            )
+            repository.saveProjectPlan(plan)
+            _snackBarMessage.emit("Rencana " + plan.title + " disimpan. Estimasi tidak mengubah saldo kas.")
+        }
+    }
+
+
+    fun tambahUnitPerumahan(
+        projectName: String,
+        unitCode: String,
+        block: String,
+        sitePosition: String,
+        landAreaM2: Double,
+        buildingAreaM2: Double,
+        salePrice: Double,
+        buyerName: String,
+        notes: String
+    ) {
+        viewModelScope.launch {
+            val project = activeProjects.value.firstOrNull { it.name.equals(projectName, ignoreCase = true) }
+                ?: throw IllegalArgumentException("Pilih proyek perumahan aktif terlebih dahulu.")
+            require(project.category == "Perumahan") { "Unit/kavling hanya dapat ditambahkan ke proyek perumahan." }
+            val unit = HousingUnitEntity(
+                id = repository.generateId("UNIT"),
+                project = project.name,
+                unitCode = unitCode.trim(),
+                block = block.trim(),
+                sitePosition = sitePosition.trim(),
+                businessModel = project.businessModel,
+                landAreaM2 = landAreaM2,
+                buildingAreaM2 = buildingAreaM2,
+                salePrice = salePrice,
+                buyerName = buyerName.trim(),
+                status = "Tersedia",
+                notes = notes.trim(),
+                createdAt = System.currentTimeMillis()
+            )
+            repository.saveHousingUnit(unit)
+            _snackBarMessage.emit("Unit " + unit.unitCode + " disimpan. Status unit tidak otomatis mencatat pendapatan kas.")
+        }
+    }
+
+    fun ubahStatusUnit(id: String, status: String, buyerName: String = "") {
+        viewModelScope.launch {
+            repository.updateHousingUnitStatus(id, status, buyerName)
+            _snackBarMessage.emit("Status unit diperbarui. Pendapatan tetap perlu dicatat sebagai transaksi kas masuk.")
+        }
+    }
+
+    fun ubahStatusRencana(id: String, status: String) {
+        viewModelScope.launch {
+            repository.updateProjectPlanStatus(id, status)
+            _snackBarMessage.emit("Status rencana diperbarui. Arus kas aktual tetap hanya berasal dari transaksi.")
         }
     }
 

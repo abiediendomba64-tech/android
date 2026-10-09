@@ -62,6 +62,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.KasViewModel
 import com.example.ui.components.DetailRow
 import com.example.ui.components.FormDropdown
+import com.example.ui.components.IsoDatePickerField
 import com.example.ui.components.formatRupiah
 import com.example.ui.theme.ExpenseRed
 import com.example.ui.theme.IncomeGreen
@@ -370,10 +371,10 @@ fun RekonsiliasiArusKasScreen(
 
                             DetailRow("Saldo Buku Kas (Sistem)", formatRupiah(currentBookBal))
 
-                            OutlinedTextField(
-                                value = reconPeriod,
-                                onValueChange = { reconPeriod = it },
-                                label = { Text("Periode Rekonsiliasi (YYYY-MM)") },
+                            IsoDatePickerField(
+                                value = reconPeriod + "-01",
+                                label = "Bulan Rekonsiliasi",
+                                onDateSelected = { reconPeriod = it.take(7) },
                                 modifier = Modifier.fillMaxWidth()
                             )
 

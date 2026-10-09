@@ -20,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Info
@@ -27,6 +28,8 @@ import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -41,6 +44,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -56,6 +60,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 import com.example.data.model.TransactionEntity
 import com.example.ui.theme.ExpenseRed
 import com.example.ui.theme.IncomeGreen
@@ -337,6 +345,7 @@ fun TransactionDetailDialog(
                 DetailRow("Kategori", tx.category)
                 DetailRow("Nominal", formatRupiah(tx.amount))
                 DetailRow("Alokasi Anggaran", tx.allocation)
+                DetailRow("Kelompok Dana", tx.fundBucket)
                 DetailRow("PIC", tx.pic)
                 if (tx.receiptNo.isNotBlank()) {
                     DetailRow("No. Bukti/Kwitansi", tx.receiptNo)
@@ -495,5 +504,77 @@ fun EmptyStateView(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center
         )
+    }
+}
+
+private fun parseIsoDateUtcMillis(value: String): Long? {
+    val formatter = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply {
+        isLenient = false
+        timeZone = TimeZone.getTimeZone("UTC")
+    }
+    return runCatching { formatter.parse(value)?.time }.getOrNull()
+}
+
+private fun formatIsoDateUtcMillis(value: Long): String =
+    SimpleDateFormat("yyyy-MM-dd", Locale.US).apply {
+        timeZone = TimeZone.getTimeZone("UTC")
+    }.format(Date(value))
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun IsoDatePickerField(
+    value: String,
+    label: String,
+    onDateSelected: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    isError: Boolean = false,
+    errorMessage: String? = null
+) {
+    var showPicker by remember { mutableStateOf(false) }
+
+    OutlinedTextField(
+        value = value,
+        onValueChange = {},
+        readOnly = true,
+        singleLine = true,
+        label = { Text(label) },
+        isError = isError,
+        supportingText = if (isError && !errorMessage.isNullOrBlank()) {
+            { Text(errorMessage, color = MaterialTheme.colorScheme.error, fontSize = 11.sp) }
+        } else null,
+        trailingIcon = {
+            IconButton(onClick = { showPicker = true }) {
+                Icon(imageVector = Icons.Default.CalendarMonth, contentDescription = "Pilih tanggal")
+            }
+        },
+        modifier = modifier
+    )
+
+    if (showPicker) {
+        val todayIso = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+        val pickerState = rememberDatePickerState(
+            initialSelectedDateMillis = parseIsoDateUtcMillis(value) ?: parseIsoDateUtcMillis(todayIso)
+        )
+        DatePickerDialog(
+            onDismissRequest = { showPicker = false },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pickerState.selectedDateMillis?.let { onDateSelected(formatIsoDateUtcMillis(it)) }
+                        showPicker = false
+                    },
+                    enabled = pickerState.selectedDateMillis != null
+                ) {
+                    Text("Pilih")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPicker = false }) {
+                    Text("Batal")
+                }
+            }
+        ) {
+            DatePicker(state = pickerState, showModeToggle = false)
+        }
     }
 }

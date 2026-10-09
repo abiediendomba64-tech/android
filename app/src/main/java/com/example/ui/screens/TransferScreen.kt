@@ -49,6 +49,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.KasViewModel
 import com.example.ui.components.EmptyStateView
 import com.example.ui.components.FormDropdown
+import com.example.ui.components.IsoDatePickerField
 import com.example.ui.components.TransactionRowItem
 import com.example.ui.components.formatRupiah
 import com.example.ui.theme.ExpenseRed
@@ -80,6 +81,7 @@ fun TransferScreen(
     var receiptNo by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("Selesai") }
+    var fundBucket by remember { mutableStateOf("PT") }
 
     // Validation states
     var amountError by remember { mutableStateOf<String?>(null) }
@@ -214,15 +216,11 @@ fun TransferScreen(
                         fontWeight = FontWeight.Bold
                     )
 
-                    OutlinedTextField(
+                                        IsoDatePickerField(
                         value = date,
-                        onValueChange = { date = it },
-                        label = { Text("Tanggal") },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = MaterialTheme.colorScheme.surface,
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surface
-                        )
+                        label = "Tanggal Transfer",
+                        onDateSelected = { date = it },
+                        modifier = Modifier.fillMaxWidth()
                     )
 
                     // Dari Akun & Ke Akun
@@ -397,7 +395,8 @@ fun TransferScreen(
                                     proofUrl = proofUrl,
                                     receiptNo = receiptNo,
                                     note = note,
-                                    status = status
+                                    status = status,
+                                    fundBucket = fundBucket
                                 ) {
                                     amountText = ""
                                     receiptNo = ""

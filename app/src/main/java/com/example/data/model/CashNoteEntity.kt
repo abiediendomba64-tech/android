@@ -1,5 +1,6 @@
 package com.example.data.model
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
@@ -11,5 +12,6 @@ data class CashNoteEntity(
     val content: String,
     val pic: String = "Admin",
     val priority: String = "Sedang", // "Rendah", "Sedang", "Tinggi"
-    val status: String = "Open" // "Open", "Done", "Follow Up"
+    val status: String = "Open", // "Open", "Done", "Follow Up"
+    @ColumnInfo(defaultValue = "''") val project: String = ""
 )
