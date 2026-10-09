@@ -61,6 +61,7 @@ import com.example.ui.KasViewModel
 import com.example.ui.components.DetailRow
 import com.example.ui.components.EmptyStateView
 import com.example.ui.components.FormDropdown
+import com.example.ui.components.IsoDatePickerField
 import com.example.ui.components.formatRupiah
 import com.example.ui.theme.ExpenseRed
 import com.example.ui.theme.IncomeGreen
@@ -77,11 +78,14 @@ fun AnggaranScreen(
     val context = LocalContext.current
     val budgetRealizations by viewModel.budgetRealizations.collectAsStateWithLifecycle()
     val activeTransactions by viewModel.activeTransactions.collectAsStateWithLifecycle()
+    val projects by viewModel.activeProjects.collectAsStateWithLifecycle()
     var showAddDialog by remember { mutableStateOf(false) }
 
     val currentPeriod = remember { SimpleDateFormat("yyyy-MM", Locale.getDefault()).format(Date()) }
     var periodInput by remember { mutableStateOf(currentPeriod) }
     var selectedCategory by remember { mutableStateOf(viewModel.masterAlokasi.first()) }
+    var selectedProject by remember { mutableStateOf("") }
+    var selectedFundBucket by remember { mutableStateOf("PT") }
     var amountInput by remember { mutableStateOf("") }
     var noteInput by remember { mutableStateOf("") }
     var targetWaPhone by remember { mutableStateOf("") }
@@ -467,11 +471,41 @@ fun AnggaranScreen(
             title = { Text(text = "Tambah Alokasi Anggaran", fontWeight = FontWeight.Bold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedTextField(
-                        value = periodInput,
-                        onValueChange = { periodInput = it },
-                        label = { Text("Periode (YYYY-MM atau 'All')") },
-                        modifier = Modifier.fillMaxWidth()
+                    FormDropdown(
+                        label = "Cakupan Periode",
+                        selectedValue = if (periodInput.equals("All", ignoreCase = true)) "Semua Periode" else "Bulanan",
+                        options = listOf("Bulanan", "Semua Periode"),
+                        onValueChange = { periodInput = if (it == "Semua Periode") "All" else currentPeriod }
+                    )
+
+                    if (!periodInput.equals("All", ignoreCase = true)) {
+                        IsoDatePickerField(
+                            value = periodInput + "-01",
+                            label = "Bulan Anggaran",
+                            onDateSelected = { periodInput = it.take(7) },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+
+                    FormDropdown(
+                        label = "Pos Alokasi Anggaran",
+                        selectedValue = selectedCategory,
+                        options = viewModel.masterAlokasi,
+                        onValueChange = { selectedCategory = it }
+                    )
+
+                    FormDropdown(
+                        label = "Proyek",
+                        selectedValue = selectedProject.ifBlank { "PT / Umum" },
+                        options = listOf("PT / Umum") + projects.map { it.name },
+                        onValueChange = { selectedProject = if (it == "PT / Umum") "" else it }
+                    )
+
+                    FormDropdown(
+                        label = "Kelompok Dana",
+                        selectedValue = selectedFundBucket,
+                        options = viewModel.masterFundBuckets,
+                        onValueChange = { selectedFundBucket = it }
                     )
 
                     FormDropdown(
@@ -502,7 +536,7 @@ fun AnggaranScreen(
                     onClick = {
                         val amt = amountInput.toDoubleOrNull() ?: 0.0
                         if (amt > 0) {
-                            viewModel.tambahAnggaran(periodInput, selectedCategory, amt, noteInput)
+                            viewModel.tambahAnggaran(periodInput, selectedCategory, amt, noteInput, selectedProject, selectedFundBucket)
                             showAddDialog = false
                             amountInput = ""
                             noteInput = ""

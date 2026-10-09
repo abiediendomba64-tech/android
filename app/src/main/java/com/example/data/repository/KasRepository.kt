@@ -8,6 +8,9 @@ import com.example.data.local.BankReconDao
 import com.example.data.local.BudgetDao
 import com.example.data.local.EmployeeDao
 import com.example.data.local.NoteDao
+import com.example.data.local.ProjectDao
+import com.example.data.local.ProjectPlanDao
+import com.example.data.local.HousingUnitDao
 import com.example.data.local.ReceivableDao
 import com.example.data.local.TransactionDao
 import androidx.room.withTransaction
@@ -19,6 +22,9 @@ import com.example.data.model.BudgetEntity
 import com.example.data.model.CashNoteEntity
 import com.example.data.model.EmployeeEntity
 import com.example.data.model.ReceivableEntity
+import com.example.data.model.ProjectEntity
+import com.example.data.model.ProjectPlanEntity
+import com.example.data.model.HousingUnitEntity
 import com.example.data.model.TransactionEntity
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
@@ -109,7 +115,10 @@ class KasRepository(
     private val employeeDao: EmployeeDao,
     private val attendanceDao: AttendanceDao,
     private val auditDao: AuditDao,
-    private val bankReconDao: BankReconDao
+    private val bankReconDao: BankReconDao,
+    private val projectDao: ProjectDao,
+    private val projectPlanDao: ProjectPlanDao,
+    private val housingUnitDao: HousingUnitDao
 ) {
     val activeTransactions: Flow<List<TransactionEntity>> = transactionDao.getAllActiveTransactions()
     val archivedTransactions: Flow<List<TransactionEntity>> = transactionDao.getArchivedTransactions()
@@ -129,6 +138,10 @@ class KasRepository(
     val attendances: Flow<List<AttendanceEntity>> = attendanceDao.getAllAttendances()
     val auditLogs: Flow<List<AuditLogEntity>> = auditDao.getRecentAuditLogs()
     val bankReconciliations: Flow<List<BankReconEntity>> = bankReconDao.getAllReconciliations()
+    val projects: Flow<List<ProjectEntity>> = projectDao.getAllProjects()
+    val activeProjects: Flow<List<ProjectEntity>> = projectDao.getActiveProjects()
+    val projectPlans: Flow<List<ProjectPlanEntity>> = projectPlanDao.getAllPlans()
+    val housingUnits: Flow<List<HousingUnitEntity>> = housingUnitDao.getAllUnits()
 
     suspend fun saveTransaction(transaction: TransactionEntity) {
         database.withTransaction {
@@ -178,6 +191,7 @@ class KasRepository(
         require(transaction.name.isNotBlank()) { "Nama transaksi wajib diisi." }
         require(transaction.category.isNotBlank()) { "Kategori transaksi wajib diisi." }
         require(transaction.allocation.isNotBlank()) { "Alokasi transaksi wajib diisi." }
+        require(transaction.fundBucket in setOf("PT", "Perdagangan", "Dana Talang", "Pribadi", "Darurat")) { "Kelompok dana transaksi tidak valid." }
         require(transaction.pic.isNotBlank()) { "PIC transaksi wajib diisi." }
         require(transaction.inputBy.isNotBlank()) { "Input Oleh transaksi wajib diisi." }
         require(transaction.inputTime > 0L) { "Waktu input transaksi tidak valid." }
@@ -337,11 +351,127 @@ class KasRepository(
         }
     }
 
+
+    suspend fun saveProject(project: ProjectEntity) {
+        require(project.id.isNotBlank()) { "ID proyek wajib diisi." }
+        require(project.name.isNotBlank()) { "Nama proyek wajib diisi." }
+        require(project.category in setOf("Pembebasan Tanah", "Cut & Fill", "Perumahan", "Perdagangan", "Operasional PT", "Lainnya")) { "Jenis proyek tidak valid." }
+        require(project.businessModel in setOf("Subsidi", "Komersial", "Tidak berlaku")) { "Model perumahan tidak valid." }
+        require(project.category == "Perumahan" || project.businessModel == "Tidak berlaku") { "Model Subsidi/Komersial hanya digunakan untuk proyek perumahan." }
+        requireIsoDate(project.startDate, "Tanggal mulai proyek")
+        requireIsoDate(project.targetEndDate, "Target selesai proyek")
+        require(project.targetEndDate >= project.startDate) { "Target selesai tidak boleh lebih awal dari tanggal mulai." }
+        require(project.budgetAmount.isFinite() && project.budgetAmount >= 0.0) { "Pagu proyek tidak valid." }
+        require(project.status in setOf("Berjalan", "Ditunda", "Selesai")) { "Status proyek tidak valid." }
+        database.withTransaction {
+            require(projectDao.getProjectById(project.id) == null) { "ID proyek sudah digunakan." }
+            require(projectDao.countByName(project.name) == 0) { "Nama proyek sudah ada. Gunakan nama yang berbeda." }
+            projectDao.insertProject(project.copy(name = project.name.trim()))
+            auditDao.insertAuditLog(AuditLogEntity(
+                dateFormatted = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()),
+                action = "CREATE_PROJECT",
+                recordId = project.id,
+                details = "Proyek " + project.name.trim() + " dibuat; jenis " + project.category + "; model " + project.businessModel + "; pagu Rp " + project.budgetAmount.toLong() + ".",
+                user = "Admin Proyek",
+                verifiedFormulaStatus = "RECORDED"
+            ))
+        }
+    }
+
+
+    suspend fun saveHousingUnit(unit: HousingUnitEntity) {
+        require(unit.id.isNotBlank()) { "ID unit wajib diisi." }
+        require(unit.project.isNotBlank()) { "Unit harus ditautkan ke proyek perumahan." }
+        require(unit.unitCode.isNotBlank()) { "Kode unit/kavling wajib diisi." }
+        require(unit.businessModel in setOf("Subsidi", "Komersial")) { "Segmen unit harus Subsidi atau Komersial." }
+        require(unit.landAreaM2.isFinite() && unit.landAreaM2 > 0.0) { "Luas tanah unit harus lebih besar dari nol." }
+        require(unit.buildingAreaM2.isFinite() && unit.buildingAreaM2 >= 0.0) { "Luas bangunan unit tidak valid." }
+        require(unit.salePrice.isFinite() && unit.salePrice > 0.0) { "Harga jual unit harus lebih besar dari nol." }
+        require(unit.status in setOf("Tersedia", "Booking", "Terjual", "Dibatalkan")) { "Status unit tidak valid." }
+        require(unit.status != "Terjual" || unit.buyerName.isNotBlank()) { "Nama pembeli diperlukan untuk unit berstatus Terjual." }
+        database.withTransaction {
+            require(housingUnitDao.getUnitById(unit.id) == null) { "ID unit sudah digunakan." }
+            val project = projectDao.getProjectByName(unit.project)
+                ?: throw IllegalArgumentException("Proyek perumahan tidak ditemukan.")
+            require(project.isActive && project.category == "Perumahan") { "Unit hanya dapat ditambahkan ke proyek perumahan yang aktif." }
+            require(project.businessModel == unit.businessModel) { "Segmen unit harus sama dengan segmen proyek perumahan." }
+            require(housingUnitDao.countCodeInProject(project.name, unit.unitCode.trim()) == 0) { "Kode unit/kavling sudah digunakan pada proyek ini." }
+            housingUnitDao.insertUnit(unit.copy(project = project.name, unitCode = unit.unitCode.trim()))
+            auditDao.insertAuditLog(AuditLogEntity(
+                dateFormatted = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()),
+                action = "CREATE_HOUSING_UNIT",
+                recordId = unit.id,
+                details = "Unit " + unit.unitCode.trim() + " ditambahkan ke proyek " + project.name + "; segmen " + unit.businessModel + "; harga Rp " + unit.salePrice.toLong() + ".",
+                user = "Admin Proyek",
+                verifiedFormulaStatus = "RECORDED"
+            ))
+        }
+    }
+
+    suspend fun updateHousingUnitStatus(id: String, status: String, buyerName: String) {
+        require(status in setOf("Tersedia", "Booking", "Terjual", "Dibatalkan")) { "Status unit tidak valid." }
+        require(status != "Terjual" || buyerName.isNotBlank()) { "Nama pembeli diperlukan untuk unit berstatus Terjual." }
+        database.withTransaction {
+            val current = housingUnitDao.getUnitById(id) ?: throw IllegalArgumentException("Unit/kavling tidak ditemukan.")
+            housingUnitDao.updateUnit(current.copy(status = status, buyerName = buyerName.trim()))
+            auditDao.insertAuditLog(AuditLogEntity(
+                dateFormatted = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()),
+                action = "UPDATE_HOUSING_UNIT_STATUS",
+                recordId = id,
+                details = "Status unit " + current.unitCode + " pada proyek " + current.project + " berubah menjadi " + status + ". Pendapatan hanya dicatat melalui transaksi kas masuk nyata.",
+                user = "Admin Proyek",
+                verifiedFormulaStatus = "RECORDED"
+            ))
+        }
+    }
+
+    suspend fun saveProjectPlan(plan: ProjectPlanEntity) {
+        require(plan.id.isNotBlank()) { "ID rencana wajib diisi." }
+        require(plan.title.isNotBlank()) { "Judul rencana wajib diisi." }
+        requireIsoDate(plan.planDate, "Tanggal rencana")
+        require(plan.category.isNotBlank()) { "Kategori rencana wajib diisi." }
+        require(plan.estimatedAmount.isFinite() && plan.estimatedAmount >= 0.0) { "Estimasi rencana tidak valid." }
+        require(plan.status in setOf("Direncanakan", "Selesai", "Batal")) { "Status rencana tidak valid." }
+        database.withTransaction {
+            require(projectPlanDao.getPlanById(plan.id) == null) { "ID rencana sudah digunakan." }
+            if (plan.project.isNotBlank()) require(projectDao.getProjectByName(plan.project)?.isActive == true) {
+                "Proyek rencana tidak terdaftar atau nonaktif."
+            }
+            projectPlanDao.insertPlan(plan.copy(title = plan.title.trim(), project = plan.project.trim()))
+            auditDao.insertAuditLog(AuditLogEntity(
+                dateFormatted = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()),
+                action = "CREATE_PROJECT_PLAN",
+                recordId = plan.id,
+                details = "Rencana " + plan.title.trim() + " pada " + plan.planDate + "; proyek " + plan.project.ifBlank { "Umum/PT" } + "; status " + plan.status + "; estimasi Rp " + plan.estimatedAmount.toLong() + ".",
+                user = "Admin Kalender",
+                verifiedFormulaStatus = "PLAN_ONLY"
+            ))
+        }
+    }
+
+    suspend fun updateProjectPlanStatus(id: String, status: String) {
+        require(status in setOf("Direncanakan", "Selesai", "Batal")) { "Status rencana tidak valid." }
+        database.withTransaction {
+            val current = projectPlanDao.getPlanById(id) ?: throw IllegalArgumentException("Rencana tidak ditemukan.")
+            projectPlanDao.updatePlan(current.copy(status = status))
+            auditDao.insertAuditLog(AuditLogEntity(
+                dateFormatted = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()),
+                action = "UPDATE_PROJECT_PLAN_STATUS",
+                recordId = id,
+                details = "Status rencana " + current.title + " berubah menjadi " + status + ".",
+                user = "Admin Kalender",
+                verifiedFormulaStatus = "PLAN_ONLY"
+            ))
+        }
+    }
+
     suspend fun saveBudget(budget: BudgetEntity) {
         require(budget.period.equals("All", ignoreCase = true) || budget.period.matches(Regex("""\d{4}-\d{2}"""))) { "Periode anggaran harus YYYY-MM atau All." }
         require(budget.category.isNotBlank()) { "Kategori anggaran wajib diisi." }
         require(budget.budgetAmount.isFinite() && budget.budgetAmount >= 0.0) { "Nominal anggaran tidak valid." }
-        budgetDao.insertBudget(budget)
+        require(budget.fundBucket in setOf("PT", "Perdagangan", "Dana Talang", "Pribadi", "Darurat")) { "Kelompok dana tidak valid." }
+        if (budget.project.isNotBlank()) require(projectDao.getProjectByName(budget.project)?.isActive == true) { "Proyek anggaran tidak terdaftar atau nonaktif." }
+        budgetDao.insertBudget(budget.copy(project = budget.project.trim()))
     }
 
     suspend fun deleteBudget(id: Long) {
@@ -449,7 +579,12 @@ class KasRepository(
     }
 
     suspend fun saveNote(note: CashNoteEntity) {
-        noteDao.insertNote(note)
+        require(note.title.isNotBlank()) { "Judul catatan wajib diisi." }
+        requireIsoDate(note.date, "Tanggal catatan")
+        require(note.priority in setOf("Rendah", "Sedang", "Tinggi")) { "Prioritas catatan tidak valid." }
+        require(note.status in setOf("Open", "Done", "Follow Up")) { "Status catatan tidak valid." }
+        if (note.project.isNotBlank()) require(projectDao.getProjectByName(note.project)?.isActive == true) { "Proyek catatan tidak terdaftar atau nonaktif." }
+        noteDao.insertNote(note.copy(project = note.project.trim()))
     }
 
     suspend fun deleteNote(id: Long) {
@@ -461,6 +596,7 @@ class KasRepository(
         require(employee.name.isNotBlank()) { "Nama karyawan wajib diisi." }
         require(employee.dailyRate.isFinite() && employee.dailyRate >= 0.0) { "Uang harian tidak valid." }
         require(employee.monthlySalary.isFinite() && employee.monthlySalary >= 0.0) { "Gaji bulanan tidak valid." }
+        if (employee.defaultProject.isNotBlank()) require(projectDao.getProjectByName(employee.defaultProject)?.isActive == true) { "Proyek alokasi karyawan tidak terdaftar atau nonaktif." }
         require(employeeDao.getEmployeeById(employee.id) == null) { "ID karyawan sudah digunakan." }
         employeeDao.insertEmployee(employee)
     }
@@ -526,6 +662,9 @@ class KasRepository(
             require(attendance.dailyAllowance.isFinite() && attendance.dailyAllowance >= 0.0) {
                 "Uang harian tidak valid."
             }
+            if (attendance.project.isNotBlank()) require(projectDao.getProjectByName(attendance.project)?.isActive == true) {
+                "Proyek absensi tidak terdaftar atau nonaktif."
+            }
             require(attendanceDao.getAttendanceByEmployeeAndDate(attendance.employeeId, attendance.date) == null) {
                 "Absensi " + attendance.employeeId + " pada " + attendance.date + " sudah ada."
             }
@@ -548,34 +687,55 @@ class KasRepository(
     suspend fun savePayrollDisbursement(
         period: String,
         totalAmount: Double,
-        accountName: String
+        accountName: String,
+        allocationsByProject: Map<String, Double> = mapOf("" to totalAmount)
     ): String {
         require(totalAmount.isFinite() && totalAmount > 0.0) { "Total payroll harus lebih besar dari Rp 0." }
         require(period.isNotBlank()) { "Periode payroll wajib diisi." }
+        require(allocationsByProject.isNotEmpty() && allocationsByProject.values.all { it.isFinite() && it >= 0.0 }) {
+            "Alokasi payroll per proyek tidak valid."
+        }
+        require(kotlin.math.abs(allocationsByProject.values.sum() - totalAmount) < 0.01) {
+            "Total alokasi payroll per proyek harus sama dengan total pencairan."
+        }
         return database.withTransaction {
             require(accountDao.getAccountByName(accountName)?.isActive == true) {
-                "Akun pembayaran $accountName tidak terdaftar atau nonaktif."
+                "Akun pembayaran " + accountName + " tidak terdaftar atau nonaktif."
             }
             val duplicate = transactionDao.countByCategoryAndReceiptNo("Gaji", "PAYROLL-$period") > 0
             require(!duplicate) { "Payroll periode $period sudah dicairkan; transaksi duplikat ditolak." }
             val now = Date()
-            val tx = TransactionEntity(
-                id = generateId("KK"),
-                type = "KELUAR",
-                date = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(now),
-                time = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(now),
-                account = accountName,
-                name = "Pembayaran Gaji & Tunjangan Karyawan ($period)",
-                category = "Gaji",
-                description = "Pencairan payroll berdasarkan rekap absensi periode $period",
-                amount = totalAmount,
-                allocation = "Gaji",
-                pic = "Bendahara",
-                receiptNo = "PAYROLL-$period",
-                status = "Selesai"
-            )
-            insertValidatedTransaction(tx)
-            tx.id
+            var firstId = ""
+            allocationsByProject.toSortedMap().forEach { (projectName, amount) ->
+                if (amount > 0.0) {
+                    if (projectName.isNotBlank()) require(projectDao.getProjectByName(projectName)?.isActive == true) {
+                        "Proyek payroll " + projectName + " tidak terdaftar atau nonaktif."
+                    }
+                    val txId = generateId("KK")
+                    if (firstId.isBlank()) firstId = txId
+                    val title = if (projectName.isBlank()) "Pembayaran Gaji PT ($period)" else "Pembayaran Gaji - $projectName ($period)"
+                    val tx = TransactionEntity(
+                        id = txId,
+                        type = "KELUAR",
+                        date = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(now),
+                        time = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(now),
+                        account = accountName,
+                        name = title,
+                        category = "Gaji",
+                        description = "Pencairan payroll berdasarkan rekap absensi periode $period; alokasi " + projectName.ifBlank { "PT/Umum" },
+                        amount = amount,
+                        allocation = "Gaji",
+                        pic = "Bendahara",
+                        receiptNo = "PAYROLL-$period",
+                        status = "Selesai",
+                        project = projectName,
+                        fundBucket = "PT"
+                    )
+                    insertValidatedTransaction(tx)
+                }
+            }
+            require(firstId.isNotBlank()) { "Tidak ada nilai payroll positif untuk dicairkan." }
+            firstId
         }
     }
 
@@ -735,6 +895,8 @@ class KasRepository(
         return budgets.map { budget ->
             val realization = settledExpenses.filter {
                 (it.date.startsWith(budget.period) || budget.period.equals("All", ignoreCase = true)) &&
+                        it.fundBucket.equals(budget.fundBucket, ignoreCase = true) &&
+                        (budget.project.isBlank() || it.project.equals(budget.project, ignoreCase = true)) &&
                         (it.category.equals(budget.category, ignoreCase = true) || it.allocation.equals(budget.category, ignoreCase = true))
             }.sumOf { it.amount }
 
@@ -928,7 +1090,7 @@ class KasRepository(
     ): String {
         val root = JSONObject()
         root.put("app", "Sistem Kas")
-        root.put("version", "3.0")
+        root.put("version", "5.0")
         root.put("timestamp", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()))
 
         val txArray = JSONArray()
@@ -950,6 +1112,7 @@ class KasRepository(
                 put("proofUrl", tx.proofUrl)
                 put("receiptNo", tx.receiptNo)
                 put("project", tx.project)
+                put("fundBucket", tx.fundBucket)
                 put("note", tx.note)
                 put("status", tx.status)
                 put("inputTime", tx.inputTime)
@@ -983,6 +1146,8 @@ class KasRepository(
                 put("category", budget.category)
                 put("budgetAmount", budget.budgetAmount)
                 put("notes", budget.notes)
+                put("project", budget.project)
+                put("fundBucket", budget.fundBucket)
             })
         }
         root.put("budgets", budgetArray)
@@ -1015,6 +1180,7 @@ class KasRepository(
                 put("pic", note.pic)
                 put("priority", note.priority)
                 put("status", note.status)
+                put("project", note.project)
             })
         }
         root.put("notes", noteArray)
@@ -1030,6 +1196,7 @@ class KasRepository(
                 put("dailyRate", employee.dailyRate)
                 put("monthlySalary", employee.monthlySalary)
                 put("isActive", employee.isActive)
+                put("defaultProject", employee.defaultProject)
             })
         }
         root.put("employees", employeeArray)
@@ -1048,6 +1215,7 @@ class KasRepository(
                 put("overtimeHours", attendance.overtimeHours)
                 put("dailyAllowance", attendance.dailyAllowance)
                 put("notes", attendance.notes)
+                put("project", attendance.project)
             })
         }
         root.put("attendances", attendanceArray)
@@ -1085,6 +1253,62 @@ class KasRepository(
         }
         root.put("bankReconciliations", reconArray)
 
+
+        val projectsArray = JSONArray()
+        projectDao.getAllProjects().first().forEach { project ->
+            projectsArray.put(JSONObject().apply {
+                put("id", project.id)
+                put("name", project.name)
+                put("category", project.category)
+                put("businessModel", project.businessModel)
+                put("location", project.location)
+                put("startDate", project.startDate)
+                put("targetEndDate", project.targetEndDate)
+                put("budgetAmount", project.budgetAmount)
+                put("status", project.status)
+                put("notes", project.notes)
+                put("isActive", project.isActive)
+                put("createdAt", project.createdAt)
+            })
+        }
+        root.put("projects", projectsArray)
+
+        val plansArray = JSONArray()
+        projectPlanDao.getAllPlans().first().forEach { plan ->
+            plansArray.put(JSONObject().apply {
+                put("id", plan.id)
+                put("project", plan.project)
+                put("planDate", plan.planDate)
+                put("title", plan.title)
+                put("category", plan.category)
+                put("estimatedAmount", plan.estimatedAmount)
+                put("status", plan.status)
+                put("details", plan.details)
+                put("createdAt", plan.createdAt)
+            })
+        }
+        root.put("projectPlans", plansArray)
+
+        val housingUnitsArray = JSONArray()
+        housingUnitDao.getAllUnits().first().forEach { unit ->
+            housingUnitsArray.put(JSONObject().apply {
+                put("id", unit.id)
+                put("project", unit.project)
+                put("unitCode", unit.unitCode)
+                put("block", unit.block)
+                put("sitePosition", unit.sitePosition)
+                put("businessModel", unit.businessModel)
+                put("landAreaM2", unit.landAreaM2)
+                put("buildingAreaM2", unit.buildingAreaM2)
+                put("salePrice", unit.salePrice)
+                put("buyerName", unit.buyerName)
+                put("status", unit.status)
+                put("notes", unit.notes)
+                put("createdAt", unit.createdAt)
+            })
+        }
+        root.put("housingUnits", housingUnitsArray)
+
         return root.toString(2)
     }
 
@@ -1118,7 +1342,9 @@ class KasRepository(
                         period = o.getString("period"),
                         category = o.getString("category"),
                         budgetAmount = o.getDouble("budgetAmount"),
-                        notes = o.getString("notes")
+                        notes = o.getString("notes"),
+                        project = o.optString("project", ""),
+                        fundBucket = o.optString("fundBucket", "PT")
                     )
                 }
             }
@@ -1156,7 +1382,8 @@ class KasRepository(
                         content = o.getString("content"),
                         pic = o.getString("pic"),
                         priority = o.getString("priority"),
-                        status = o.getString("status")
+                        status = o.getString("status"),
+                        project = o.optString("project", "")
                     )
                 }
             }
@@ -1174,7 +1401,8 @@ class KasRepository(
                         phone = o.getString("phone"),
                         dailyRate = o.getDouble("dailyRate"),
                         monthlySalary = o.getDouble("monthlySalary"),
-                        isActive = o.getBoolean("isActive")
+                        isActive = o.getBoolean("isActive"),
+                        defaultProject = o.optString("defaultProject", "")
                     )
                 }
             }
@@ -1195,7 +1423,8 @@ class KasRepository(
                         status = o.getString("status"),
                         overtimeHours = o.getDouble("overtimeHours"),
                         dailyAllowance = o.getDouble("dailyAllowance"),
-                        notes = o.getString("notes")
+                        notes = o.getString("notes"),
+                        project = o.optString("project", "")
                     )
                 }
             }
@@ -1239,6 +1468,71 @@ class KasRepository(
                 }
             }
 
+
+            val projects = mutableListOf<ProjectEntity>()
+            if (root.has("projects")) {
+                val array = root.getJSONArray("projects")
+                for (i in 0 until array.length()) {
+                    val o = array.getJSONObject(i)
+                    projects += ProjectEntity(
+                        id = o.getString("id"),
+                        name = o.getString("name"),
+                        category = o.getString("category"),
+                        businessModel = o.optString("businessModel", "Tidak berlaku"),
+                        location = o.optString("location", ""),
+                        startDate = o.getString("startDate"),
+                        targetEndDate = o.getString("targetEndDate"),
+                        budgetAmount = o.getDouble("budgetAmount"),
+                        status = o.getString("status"),
+                        notes = o.optString("notes", ""),
+                        isActive = o.optBoolean("isActive", true),
+                        createdAt = o.optLong("createdAt", System.currentTimeMillis())
+                    )
+                }
+            }
+
+            val projectPlans = mutableListOf<ProjectPlanEntity>()
+            if (root.has("projectPlans")) {
+                val array = root.getJSONArray("projectPlans")
+                for (i in 0 until array.length()) {
+                    val o = array.getJSONObject(i)
+                    projectPlans += ProjectPlanEntity(
+                        id = o.getString("id"),
+                        project = o.optString("project", ""),
+                        planDate = o.getString("planDate"),
+                        title = o.getString("title"),
+                        category = o.getString("category"),
+                        estimatedAmount = o.optDouble("estimatedAmount", 0.0),
+                        status = o.getString("status"),
+                        details = o.optString("details", ""),
+                        createdAt = o.optLong("createdAt", System.currentTimeMillis())
+                    )
+                }
+            }
+
+            val housingUnits = mutableListOf<HousingUnitEntity>()
+            if (root.has("housingUnits")) {
+                val array = root.getJSONArray("housingUnits")
+                for (i in 0 until array.length()) {
+                    val o = array.getJSONObject(i)
+                    housingUnits += HousingUnitEntity(
+                        id = o.getString("id"),
+                        project = o.getString("project"),
+                        unitCode = o.getString("unitCode"),
+                        block = o.optString("block", ""),
+                        sitePosition = o.optString("sitePosition", ""),
+                        businessModel = o.getString("businessModel"),
+                        landAreaM2 = o.getDouble("landAreaM2"),
+                        buildingAreaM2 = o.optDouble("buildingAreaM2", 0.0),
+                        salePrice = o.getDouble("salePrice"),
+                        buyerName = o.optString("buyerName", ""),
+                        status = o.getString("status"),
+                        notes = o.optString("notes", ""),
+                        createdAt = o.optLong("createdAt", System.currentTimeMillis())
+                    )
+                }
+            }
+
             val transactions = mutableListOf<TransactionEntity>()
             if (root.has("transactions")) {
                 val array = root.getJSONArray("transactions")
@@ -1269,7 +1563,8 @@ class KasRepository(
                         inputBy = o.getString("inputBy"),
                         isArchived = o.getBoolean("isArchived"),
                         archivedAt = archivedAt,
-                        archivedBy = archivedBy
+                        archivedBy = archivedBy,
+                        fundBucket = o.optString("fundBucket", "PT")
                     )
                 }
             }
@@ -1283,6 +1578,9 @@ class KasRepository(
                 val existingReconIds = bankReconDao.getAllReconciliations().first().map { it.id }.toSet()
                 val existingBudgetIds = budgetDao.getAllBudgets().first().map { it.id }.filter { it != 0L }.toSet()
                 val existingNoteIds = noteDao.getAllNotes().first().map { it.id }.filter { it != 0L }.toSet()
+                val existingProjectIds = projectDao.getAllProjects().first().map { it.id }.toSet()
+                val existingPlanIds = projectPlanDao.getAllPlans().first().map { it.id }.toSet()
+                val existingUnitIds = housingUnitDao.getAllUnits().first().map { it.id }.toSet()
 
                 require(accounts.map { it.id }.distinct().size == accounts.size) { "Backup memiliki ID akun duplikat." }
                 require(accounts.none { it.id in existingAccountIds }) { "Backup memiliki ID akun yang sudah ada di database." }
@@ -1298,6 +1596,12 @@ class KasRepository(
                 require(recons.none { it.id in existingReconIds }) { "Backup memiliki ID rekonsiliasi yang sudah ada di database." }
                 require(budgets.all { it.id == 0L || it.id !in existingBudgetIds }) { "Backup memiliki ID anggaran yang sudah ada di database." }
                 require(notes.all { it.id == 0L || it.id !in existingNoteIds }) { "Backup memiliki ID catatan yang sudah ada di database." }
+                require(projects.map { it.id }.distinct().size == projects.size) { "Backup memiliki ID proyek duplikat." }
+                require(projects.none { it.id in existingProjectIds }) { "Backup memiliki ID proyek yang sudah ada di database." }
+                require(projectPlans.map { it.id }.distinct().size == projectPlans.size) { "Backup memiliki ID rencana duplikat." }
+                require(projectPlans.none { it.id in existingPlanIds }) { "Backup memiliki ID rencana yang sudah ada di database." }
+                require(housingUnits.map { it.id }.distinct().size == housingUnits.size) { "Backup memiliki ID unit duplikat." }
+                require(housingUnits.none { it.id in existingUnitIds }) { "Backup memiliki ID unit yang sudah ada di database." }
 
                 val seenAccountNames = mutableSetOf<String>()
                 accounts.forEach { account ->
@@ -1311,10 +1615,39 @@ class KasRepository(
                 }
                 accounts.forEach { accountDao.insertAccount(it.copy(name = it.name.trim())) }
 
+                projects.forEach { project ->
+                    require(project.name.isNotBlank()) { "Backup memiliki proyek tanpa nama." }
+                    require(project.category in setOf("Pembebasan Tanah", "Cut & Fill", "Perumahan", "Perdagangan", "Operasional PT", "Lainnya")) { "Jenis proyek backup tidak valid." }
+                    requireIsoDate(project.startDate, "Tanggal mulai proyek backup")
+                    requireIsoDate(project.targetEndDate, "Tanggal target proyek backup")
+                    require(project.targetEndDate >= project.startDate) { "Target proyek backup lebih awal daripada tanggal mulai." }
+                    require(project.budgetAmount.isFinite() && project.budgetAmount >= 0.0) { "Pagu proyek backup tidak valid." }
+                    require(project.status in setOf("Berjalan", "Ditunda", "Selesai")) { "Status proyek backup tidak valid." }
+                    require(projectDao.countByName(project.name) == 0) { "Nama proyek backup sudah dipakai: " + project.name }
+                }
+                projects.forEach { projectDao.insertProject(it.copy(name = it.name.trim())) }
+
+                housingUnits.forEach { unit ->
+                    val project = projectDao.getProjectByName(unit.project)
+                        ?: throw IllegalArgumentException("Proyek unit backup tidak ditemukan: " + unit.project)
+                    require(project.category == "Perumahan" && project.isActive) { "Unit backup harus terkait proyek perumahan aktif." }
+                    require(unit.businessModel == project.businessModel) { "Segmen unit backup berbeda dari segmen proyek." }
+                    require(unit.unitCode.isNotBlank()) { "Kode unit backup wajib diisi." }
+                    require(unit.landAreaM2.isFinite() && unit.landAreaM2 > 0.0) { "Luas tanah unit backup tidak valid." }
+                    require(unit.buildingAreaM2.isFinite() && unit.buildingAreaM2 >= 0.0) { "Luas bangunan unit backup tidak valid." }
+                    require(unit.salePrice.isFinite() && unit.salePrice > 0.0) { "Harga unit backup tidak valid." }
+                    require(unit.status in setOf("Tersedia", "Booking", "Terjual", "Dibatalkan")) { "Status unit backup tidak valid." }
+                    require(unit.status != "Terjual" || unit.buyerName.isNotBlank()) { "Nama pembeli wajib diisi untuk unit terjual." }
+                    require(housingUnitDao.countCodeInProject(project.name, unit.unitCode) == 0) { "Kode unit backup sudah digunakan: " + unit.unitCode }
+                }
+                housingUnits.forEach { housingUnitDao.insertUnit(it) }
+
                 budgets.forEach { budget ->
                     require(budget.period.equals("All", ignoreCase = true) || budget.period.matches(Regex("""\d{4}-\d{2}"""))) { "Backup memiliki periode anggaran tidak valid: ${budget.period}." }
                     require(budget.category.isNotBlank()) { "Backup memiliki kategori anggaran kosong." }
                     require(budget.budgetAmount.isFinite() && budget.budgetAmount >= 0.0) { "Backup memiliki nominal anggaran tidak valid." }
+                    require(budget.fundBucket in setOf("PT", "Perdagangan", "Dana Talang", "Pribadi", "Darurat")) { "Kelompok dana anggaran backup tidak valid." }
+                    if (budget.project.isNotBlank()) require(projectDao.getProjectByName(budget.project) != null) { "Proyek anggaran backup tidak ditemukan: " + budget.project }
                 }
                 if (budgets.isNotEmpty()) budgetDao.insertBudgets(budgets)
 
@@ -1334,7 +1667,8 @@ class KasRepository(
                 employees.forEach { employee ->
                     require(employee.name.isNotBlank()) { "Backup memiliki karyawan tanpa nama." }
                     require(employee.dailyRate.isFinite() && employee.dailyRate >= 0.0) { "Uang harian ${employee.id} tidak valid." }
-                    require(employee.monthlySalary.isFinite() && employee.monthlySalary >= 0.0) { "Gaji bulanan ${employee.id} tidak valid." }
+                    require(employee.monthlySalary.isFinite() && employee.monthlySalary >= 0.0) { "Gaji bulanan " + employee.id + " tidak valid." }
+                    if (employee.defaultProject.isNotBlank()) require(projectDao.getProjectByName(employee.defaultProject) != null) { "Proyek alokasi karyawan backup tidak ditemukan: " + employee.defaultProject }
                 }
                 if (employees.isNotEmpty()) employeeDao.insertEmployees(employees)
 
@@ -1344,7 +1678,8 @@ class KasRepository(
                     require(attendance.date.matches(Regex("""\d{4}-\d{2}-\d{2}"""))) { "Tanggal absensi ${attendance.id} tidak valid." }
                     require(attendance.status in setOf("Hadir", "Izin", "Sakit", "Alpa", "Cuti")) { "Status absensi ${attendance.id} tidak valid." }
                     require(attendance.overtimeHours.isFinite() && attendance.overtimeHours >= 0.0) { "Jam lembur ${attendance.id} tidak valid." }
-                    require(attendance.dailyAllowance.isFinite() && attendance.dailyAllowance >= 0.0) { "Uang harian ${attendance.id} tidak valid." }
+                    require(attendance.dailyAllowance.isFinite() && attendance.dailyAllowance >= 0.0) { "Uang harian " + attendance.id + " tidak valid." }
+                    if (attendance.project.isNotBlank()) require(projectDao.getProjectByName(attendance.project) != null) { "Proyek absensi backup tidak ditemukan: " + attendance.project }
                 }
                 if (attendances.isNotEmpty()) attendanceDao.insertAttendances(attendances)
 
@@ -1352,7 +1687,8 @@ class KasRepository(
                     validateTransaction(tx)
                     require(tx.date.matches(Regex("""\d{4}-\d{2}-\d{2}"""))) { "Tanggal transaksi ${tx.id} tidak valid." }
                     require(tx.time.matches(Regex("""\d{2}:\d{2}:\d{2}"""))) { "Jam transaksi ${tx.id} tidak valid." }
-                    require(tx.name.isNotBlank() && tx.category.isNotBlank()) { "Transaksi ${tx.id} tidak lengkap." }
+                    require(tx.name.isNotBlank() && tx.category.isNotBlank()) { "Transaksi " + tx.id + " tidak lengkap." }
+                    require(tx.fundBucket in setOf("PT", "Perdagangan", "Dana Talang", "Pribadi", "Darurat")) { "Kelompok dana transaksi backup tidak valid." }
                     require(tx.inputTime > 0L) { "Waktu input transaksi ${tx.id} tidak valid." }
                     require(!tx.isArchived || tx.archivedAt != null) { "Transaksi arsip ${tx.id} harus memiliki waktu arsip." }
                     require(!tx.isArchived || tx.archivedBy?.isNotBlank() == true) { "Transaksi arsip ${tx.id} harus memiliki pengarsip." }
@@ -1374,12 +1710,22 @@ class KasRepository(
                     )
                 }
 
+                projectPlans.forEach { plan ->
+                    requireIsoDate(plan.planDate, "Tanggal rencana backup")
+                    require(plan.title.isNotBlank()) { "Rencana backup tidak memiliki judul." }
+                    require(plan.estimatedAmount.isFinite() && plan.estimatedAmount >= 0.0) { "Estimasi rencana backup tidak valid." }
+                    require(plan.status in setOf("Direncanakan", "Selesai", "Batal")) { "Status rencana backup tidak valid." }
+                    if (plan.project.isNotBlank()) require(projectDao.getProjectByName(plan.project)?.isActive == true) { "Proyek rencana backup tidak ditemukan: " + plan.project }
+                }
+                projectPlans.forEach { projectPlanDao.insertPlan(it) }
+
                 if (notes.isNotEmpty()) {
                     notes.forEach { note ->
                         require(note.date.matches(Regex("""\d{4}-\d{2}-\d{2}"""))) { "Tanggal catatan ${note.id} tidak valid." }
                         require(note.title.isNotBlank()) { "Catatan ${note.id} tidak memiliki judul." }
                         require(note.priority in setOf("Rendah", "Sedang", "Tinggi")) { "Prioritas catatan ${note.id} tidak valid." }
-                        require(note.status in setOf("Open", "Done", "Follow Up")) { "Status catatan ${note.id} tidak valid." }
+                        require(note.status in setOf("Open", "Done", "Follow Up")) { "Status catatan " + note.id + " tidak valid." }
+                        if (note.project.isNotBlank()) require(projectDao.getProjectByName(note.project)?.isActive == true) { "Proyek catatan backup tidak ditemukan: " + note.project }
                     }
                     noteDao.insertNotes(notes)
                 }
@@ -1401,7 +1747,7 @@ class KasRepository(
         "ID", "Tipe", "Tanggal", "Jam", "Akun", "Ke Akun", "Nama Transaksi",
         "Kategori", "Keterangan", "Nominal", "Alokasi", "PIC", "Bukti", "No Bukti",
         "Proyek", "Catatan", "Status", "Waktu Input", "Input Oleh", "Diarsipkan",
-        "Waktu Arsip", "Diarsipkan Oleh"
+        "Waktu Arsip", "Diarsipkan Oleh", "Kelompok Dana"
     )
 
     fun exportTransactionsToCsv(transactions: List<TransactionEntity>): String {
@@ -1422,7 +1768,7 @@ class KasRepository(
                 formatSpreadsheetTimestamp(tx.inputTime), tx.inputBy,
                 if (tx.isArchived) "YA" else "TIDAK",
                 tx.archivedAt?.let(::formatSpreadsheetTimestamp).orEmpty(),
-                tx.archivedBy.orEmpty()
+                tx.archivedBy.orEmpty(), tx.fundBucket
             )
             row.forEachIndexed { index, value ->
                 if (index > 0) sb.append(',')
@@ -1510,6 +1856,7 @@ class KasRepository(
                     val project = cell(row, "Proyek", "Project")
                     val note = cell(row, "Catatan", "Note")
                     val status = cell(row, "Status")
+                    val fundBucket = cell(row, "Kelompok Dana", "Fund Bucket").ifBlank { "PT" }
                     val inputTimeRaw = cell(row, "Waktu Input", "Input Time")
                     val inputTime = if (inputTimeRaw.isBlank()) System.currentTimeMillis() else parseSpreadsheetTimestamp(inputTimeRaw)
                     val inputBy = cell(row, "Input Oleh", "Input By").ifBlank { "Spreadsheet Import" }
@@ -1539,7 +1886,7 @@ class KasRepository(
                         name=name, category=category, description=description, amount=amount,
                         allocation=allocation, pic=pic, proofUrl=proofUrl, receiptNo=receiptNo,
                         project=project, note=note, status=status, inputTime=inputTime, inputBy=inputBy,
-                        isArchived=isArchived, archivedAt=archivedAt, archivedBy=archivedBy
+                        isArchived=isArchived, archivedAt=archivedAt, archivedBy=archivedBy, fundBucket=fundBucket
                     )
                     validateTransaction(tx)
                     txList += tx

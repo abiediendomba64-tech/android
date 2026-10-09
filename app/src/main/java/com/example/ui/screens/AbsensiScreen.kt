@@ -70,6 +70,7 @@ import com.example.ui.KasViewModel
 import com.example.ui.components.DetailRow
 import com.example.ui.components.EmptyStateView
 import com.example.ui.components.FormDropdown
+import com.example.ui.components.IsoDatePickerField
 import com.example.ui.components.formatDateIndo
 import com.example.ui.components.formatRupiah
 import com.example.ui.theme.ExpenseRed
@@ -91,6 +92,7 @@ fun AbsensiScreen(
     val filteredAttendances by viewModel.filteredAttendances.collectAsStateWithLifecycle()
     val summary by viewModel.attendanceSummary.collectAsStateWithLifecycle()
     val accounts by viewModel.accounts.collectAsStateWithLifecycle()
+    val projects by viewModel.activeProjects.collectAsStateWithLifecycle()
 
     val filterMode by viewModel.attendanceFilterMode.collectAsStateWithLifecycle()
     val selectedDate by viewModel.attendanceSelectedDate.collectAsStateWithLifecycle()
@@ -114,6 +116,7 @@ fun AbsensiScreen(
     var empPhone by remember { mutableStateOf("") }
     var empDailyRate by remember { mutableStateOf("") }
     var empSalary by remember { mutableStateOf("") }
+    var empDefaultProject by remember { mutableStateOf("") }
 
     // Attendance Form States
     var selectedEmpId by remember { mutableStateOf(employees.firstOrNull()?.id ?: "") }
@@ -122,6 +125,7 @@ fun AbsensiScreen(
     var attTimeOut by remember { mutableStateOf("17:00") }
     var attOvertime by remember { mutableStateOf("0") }
     var attNotes by remember { mutableStateOf("") }
+    var attProject by remember { mutableStateOf("") }
 
     val accountNames = accounts.map { it.name }
     var disburseAccount by remember { mutableStateOf(accountNames.firstOrNull().orEmpty()) }
@@ -266,10 +270,10 @@ fun AbsensiScreen(
                     Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         when (filterMode) {
                             "Harian" -> {
-                                OutlinedTextField(
+                                IsoDatePickerField(
                                     value = selectedDate,
-                                    onValueChange = { viewModel.attendanceSelectedDate.value = it },
-                                    label = { Text("Pilih Tanggal (YYYY-MM-DD)") },
+                                    label = "Pilih Tanggal Absensi",
+                                    onDateSelected = { viewModel.attendanceSelectedDate.value = it },
                                     modifier = Modifier.fillMaxWidth()
                                 )
 
@@ -294,33 +298,33 @@ fun AbsensiScreen(
                                 }
                             }
                             "Bulanan" -> {
-                                OutlinedTextField(
-                                    value = selectedMonth,
-                                    onValueChange = { viewModel.attendanceSelectedMonth.value = it },
-                                    label = { Text("Pilih Bulan (YYYY-MM)") },
+                                IsoDatePickerField(
+                                    value = selectedMonth + "-01",
+                                    label = "Pilih Bulan",
+                                    onDateSelected = { viewModel.attendanceSelectedMonth.value = it.take(7) },
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             }
                             "Tahunan" -> {
-                                OutlinedTextField(
-                                    value = selectedYear,
-                                    onValueChange = { viewModel.attendanceSelectedYear.value = it },
-                                    label = { Text("Pilih Tahun (YYYY)") },
+                                IsoDatePickerField(
+                                    value = selectedYear + "-01-01",
+                                    label = "Pilih Tahun",
+                                    onDateSelected = { viewModel.attendanceSelectedYear.value = it.take(4) },
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             }
                             "Periodik" -> {
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    OutlinedTextField(
+                                    IsoDatePickerField(
                                         value = startDate,
-                                        onValueChange = { viewModel.attendanceStartDate.value = it },
-                                        label = { Text("Tgl Mulai") },
+                                        label = "Tanggal Mulai",
+                                        onDateSelected = { viewModel.attendanceStartDate.value = it },
                                         modifier = Modifier.weight(1f)
                                     )
-                                    OutlinedTextField(
+                                    IsoDatePickerField(
                                         value = endDate,
-                                        onValueChange = { viewModel.attendanceEndDate.value = it },
-                                        label = { Text("Tgl Akhir") },
+                                        label = "Tanggal Akhir",
+                                        onDateSelected = { viewModel.attendanceEndDate.value = it },
                                         modifier = Modifier.weight(1f)
                                     )
                                 }
@@ -586,6 +590,13 @@ fun AbsensiScreen(
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.fillMaxWidth()
                     )
+
+                    FormDropdown(
+                        label = "Alokasi Gaji ke Proyek",
+                        selectedValue = empDefaultProject.ifBlank { "PT / Umum" },
+                        options = listOf("PT / Umum") + projects.map { it.name },
+                        onValueChange = { empDefaultProject = if (it == "PT / Umum") "" else it }
+                    )
                 }
             },
             confirmButton = {
@@ -594,10 +605,11 @@ fun AbsensiScreen(
                         val rate = empDailyRate.toDoubleOrNull()
                         val sal = empSalary.toDoubleOrNull()
                         if (empName.isNotBlank() && rate != null && sal != null && rate >= 0.0 && sal >= 0.0) {
-                            viewModel.tambahKaryawan(empName, empPosition, empDept, empPhone, rate, sal)
+                            viewModel.tambahKaryawan(empName, empPosition, empDept, empPhone, rate, sal, empDefaultProject)
                             showAddEmployeeDialog = false
                             empName = ""
                             empPosition = ""
+                            empDefaultProject = ""
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue)
@@ -635,10 +647,17 @@ fun AbsensiScreen(
                             val found = employees.firstOrNull { "${it.name} (${it.department})" == selected }
                             if (found != null) {
                                 selectedEmpId = found.id
+                                attProject = found.defaultProject
                             }
                         }
                     )
 
+                    FormDropdown(
+                        label = "Proyek pekerjaan",
+                        selectedValue = attProject.ifBlank { "PT / Umum" },
+                        options = listOf("PT / Umum") + projects.map { it.name },
+                        onValueChange = { attProject = if (it == "PT / Umum") "" else it }
+                    )
                     FormDropdown(
                         label = "Status Kehadiran",
                         selectedValue = attStatus,
@@ -693,7 +712,8 @@ fun AbsensiScreen(
                             status = attStatus,
                             overtime = ovt,
                             allowance = allowance,
-                            notes = attNotes
+                            notes = attNotes,
+                            project = attProject
                         )
                         showRecordAttendanceDialog = false
                         attNotes = ""

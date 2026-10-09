@@ -64,6 +64,7 @@ import com.example.ui.KasViewModel
 import com.example.ui.components.DetailRow
 import com.example.ui.components.EmptyStateView
 import com.example.ui.components.FormDropdown
+import com.example.ui.components.IsoDatePickerField
 import com.example.ui.components.formatDateIndo
 import com.example.ui.components.formatRupiah
 import com.example.ui.theme.ExpenseRed
@@ -442,10 +443,10 @@ fun PiutangScreen(
                         modifier = Modifier.fillMaxWidth()
                     )
 
-                    OutlinedTextField(
+                    IsoDatePickerField(
                         value = dueDateInput,
-                        onValueChange = { dueDateInput = it },
-                        label = { Text("Tanggal Jatuh Tempo (YYYY-MM-DD)") },
+                        label = "Tanggal Jatuh Tempo",
+                        onDateSelected = { dueDateInput = it },
                         modifier = Modifier.fillMaxWidth()
                     )
 

@@ -214,15 +214,11 @@ fun TransferScreen(
                         fontWeight = FontWeight.Bold
                     )
 
-                    OutlinedTextField(
+                                        IsoDatePickerField(
                         value = date,
-                        onValueChange = { date = it },
-                        label = { Text("Tanggal") },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = MaterialTheme.colorScheme.surface,
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surface
-                        )
+                        label = "Tanggal Transfer",
+                        onDateSelected = { date = it },
+                        modifier = Modifier.fillMaxWidth()
                     )
 
                     // Dari Akun & Ke Akun
@@ -397,7 +393,8 @@ fun TransferScreen(
                                     proofUrl = proofUrl,
                                     receiptNo = receiptNo,
                                     note = note,
-                                    status = status
+                                    status = status,
+                                    fundBucket = fundBucket
                                 ) {
                                     amountText = ""
                                     receiptNo = ""
