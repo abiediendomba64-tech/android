@@ -639,10 +639,10 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         onSuccess: () -> Unit
     ) {
         viewModelScope.launch {
-            val allocationsByProject = employees.value
-                .groupBy { it.defaultProject }
-                .mapValues { (_, team) -> repository.calculatePayrollTotal(team, filteredAttendances.value) }
-                .filterValues { it > 0.0 }
+            val allocationsByProject = repository.calculatePayrollAllocations(
+                employees = employees.value,
+                attendances = filteredAttendances.value
+            )
             val payrollTotal = allocationsByProject.values.sum()
             require(totalGaji.isFinite() && totalGaji > 0.0) { "Total payroll harus lebih besar dari Rp 0." }
             require(kotlin.math.abs(payrollTotal - totalGaji) < 0.01) {

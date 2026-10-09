@@ -857,4 +857,47 @@ class ExampleRobolectricTest {
         assertEquals(1000000.0, payrollTransactions.filter { it.project == projectB.name }.sumOf { it.amount }, 0.01)
     }
 
+
+    @Test
+    fun payrollAllocationSeparatesMonthlyBaseAndAttendanceProjectCosts() {
+        val employee = EmployeeEntity(
+            id = "EMP-ALLOC-001",
+            name = "Karyawan Proyek",
+            position = "Operator",
+            department = "Lapangan",
+            phone = "",
+            dailyRate = 100000.0,
+            monthlySalary = 3000000.0,
+            defaultProject = "PT/Umum"
+        )
+        val attendances = listOf(
+            AttendanceEntity(
+                id = "ATT-ALLOC-001",
+                employeeId = employee.id,
+                employeeName = employee.name,
+                department = employee.department,
+                date = "2026-11-01",
+                status = "Hadir",
+                overtimeHours = 2.0,
+                dailyAllowance = 100000.0,
+                project = "Cut & Fill A"
+            ),
+            AttendanceEntity(
+                id = "ATT-ALLOC-002",
+                employeeId = employee.id,
+                employeeName = employee.name,
+                department = employee.department,
+                date = "2026-11-02",
+                status = "Alpa",
+                project = "Cut & Fill A"
+            )
+        )
+
+        val allocations = repository.calculatePayrollAllocations(listOf(employee), attendances)
+        assertEquals(2900000.0, allocations["PT/Umum"] ?: 0.0, 0.01)
+        assertEquals(137500.0, allocations["Cut & Fill A"] ?: 0.0, 0.01)
+        assertEquals(repository.calculatePayrollTotal(listOf(employee), attendances), allocations.values.sum(), 0.01)
+        assertTrue(allocations.values.all { it >= 0.0 })
+    }
+
 }

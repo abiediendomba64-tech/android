@@ -993,6 +993,95 @@ class KasRepository(
     ): Double = employees.sumOf { calculatePayrollForEmployee(it, attendances).net }
 
 
+    /**
+     * Allocates net payroll to real bookkeeping projects:
+     * - monthly base salary follows the employee's default project;
+     * - attendance allowance and overtime follow the attendance project;
+     * - blank attendance project falls back to the employee's default project;
+     * - absence deductions reduce the default-project share first, then other positive shares.
+     * The result is non-negative per project and sums to the existing payslip total.
+     */
+    fun calculatePayrollAllocations(
+        employees: List<EmployeeEntity>,
+        attendances: List<AttendanceEntity>
+    ): Map<String, Double> {
+        val totals = linkedMapOf<String, Double>()
+
+        employees.forEach { employee ->
+            val rows = attendances.filter { it.employeeId == employee.id }
+            val payroll = calculatePayrollForEmployee(employee, rows)
+            if (payroll.net <= 0.0) return@forEach
+
+            val byProject = linkedMapOf<String, Double>()
+            fun addCost(project: String, amount: Double) {
+                if (amount.isFinite() && amount > 0.0) {
+                    byProject[project.trim()] = (byProject[project.trim()] ?: 0.0) + amount
+                }
+            }
+
+            addCost(employee.defaultProject, payroll.baseSalary)
+
+            val recordedAllowance = rows.sumOf { it.dailyAllowance }
+            if (recordedAllowance > 0.0) {
+                rows.forEach { attendance ->
+                    addCost(attendance.project.ifBlank { employee.defaultProject }, attendance.dailyAllowance)
+                }
+            } else {
+                rows.filter { it.status.equals("Hadir", ignoreCase = true) }.forEach { attendance ->
+                    addCost(attendance.project.ifBlank { employee.defaultProject }, employee.dailyRate)
+                }
+            }
+
+            rows.forEach { attendance ->
+                if (attendance.overtimeHours > 0.0) {
+                    addCost(
+                        attendance.project.ifBlank { employee.defaultProject },
+                        attendance.overtimeHours * (employee.dailyRate / 8.0 * 1.5)
+                    )
+                }
+            }
+
+            var remainingDeduction = payroll.absenceDeduction
+            val preferredProject = employee.defaultProject.trim()
+            val preferredAmount = byProject[preferredProject] ?: 0.0
+            val preferredDeduction = minOf(preferredAmount, remainingDeduction)
+            if (preferredDeduction > 0.0) {
+                byProject[preferredProject] = preferredAmount - preferredDeduction
+                remainingDeduction -= preferredDeduction
+            }
+
+            if (remainingDeduction > 0.0) {
+                byProject.keys.toList().filter { it != preferredProject }.forEach { project ->
+                    if (remainingDeduction > 0.0) {
+                        val available = byProject[project] ?: 0.0
+                        val deduction = minOf(available, remainingDeduction)
+                        byProject[project] = available - deduction
+                        remainingDeduction -= deduction
+                    }
+                }
+            }
+
+            val nonZero = byProject.filterValues { it > 0.0 }
+            val allocatedNet = nonZero.values.sum()
+            val difference = payroll.net - allocatedNet
+            val corrected = nonZero.toMutableMap()
+            if (kotlin.math.abs(difference) >= 0.005) {
+                val correctionProject = preferredProject.takeIf { (corrected[it] ?: 0.0) > 0.0 }
+                    ?: corrected.keys.firstOrNull()
+                if (correctionProject != null) {
+                    corrected[correctionProject] = ((corrected[correctionProject] ?: 0.0) + difference).coerceAtLeast(0.0)
+                }
+            }
+
+            corrected.filterValues { it > 0.0 }.forEach { (project, amount) ->
+                totals[project] = (totals[project] ?: 0.0) + amount
+            }
+        }
+
+        return totals.filterValues { it > 0.0 }
+    }
+
+
     fun calculateAttendanceSummary(attendances: List<AttendanceEntity>): AttendanceSummary {
         val empSet = attendances.map { it.employeeId }.toSet()
         val hadir = attendances.count { it.status.equals("Hadir", ignoreCase = true) }
