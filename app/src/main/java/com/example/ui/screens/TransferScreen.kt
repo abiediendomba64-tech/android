@@ -66,8 +66,9 @@ fun TransferScreen(
 ) {
     val accounts by viewModel.activeAccounts.collectAsStateWithLifecycle()
     val transactions by viewModel.activeTransactions.collectAsStateWithLifecycle()
+    val ledgerTransactions by viewModel.ledgerTransactions.collectAsStateWithLifecycle()
     val transferList = transactions.filter { it.type == "TRANSFER" }
-    val totalTransfer = transferList.filter { it.status == "Selesai" }.sumOf { it.amount }
+    val totalTransfer = ledgerTransactions.filter { it.type == "TRANSFER" && it.status == "Selesai" }.sumOf { it.amount }
 
     val accountNames = accounts.map { it.name }
     val todayStr = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()) }
