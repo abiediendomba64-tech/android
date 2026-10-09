@@ -66,8 +66,9 @@ fun KasKeluarScreen(
     val accounts by viewModel.activeAccounts.collectAsStateWithLifecycle()
     val projects by viewModel.activeProjects.collectAsStateWithLifecycle()
     val transactions by viewModel.activeTransactions.collectAsStateWithLifecycle()
+    val ledgerTransactions by viewModel.ledgerTransactions.collectAsStateWithLifecycle()
     val kasKeluarList = transactions.filter { it.type == "KELUAR" }
-    val totalKeluar = kasKeluarList.filter { it.status == "Selesai" }.sumOf { it.amount }
+    val totalKeluar = ledgerTransactions.filter { it.type == "KELUAR" && it.status == "Selesai" }.sumOf { it.amount }
 
     val todayStr = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()) }
 
