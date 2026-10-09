@@ -130,6 +130,7 @@ fun AbsensiScreen(
     var attProject by remember { mutableStateOf("") }
 
     val accountNames = accounts.map { it.name }
+    val payrollRequiresMonthlyFilter = employees.any { it.monthlySalary > 0.0 } && filterMode != "Bulanan"
     var disburseAccount by remember { mutableStateOf(accountNames.firstOrNull().orEmpty()) }
 
     Scaffold(
@@ -389,7 +390,7 @@ fun AbsensiScreen(
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(
                                 onClick = { showDisburseSalaryDialog = true },
-                                enabled = !(filterMode == "Harian" && employees.any { it.monthlySalary > 0.0 }),
+                                enabled = !payrollRequiresMonthlyFilter,
                                 modifier = Modifier.weight(1f),
                                 colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
                                 shape = RoundedCornerShape(8.dp)
@@ -401,6 +402,7 @@ fun AbsensiScreen(
 
                             Button(
                                 onClick = { showSelectPayslipEmployeeDialog = true },
+                                enabled = !payrollRequiresMonthlyFilter,
                                 modifier = Modifier.weight(1f),
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6B21A8)),
                                 shape = RoundedCornerShape(8.dp)
@@ -410,9 +412,9 @@ fun AbsensiScreen(
                                 Text("Slip Gaji", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
                         }
-                        if (filterMode == "Harian" && employees.any { it.monthlySalary > 0.0 }) {
+                        if (payrollRequiresMonthlyFilter) {
                             Text(
-                                "Pilih Bulanan atau Periodik untuk mencairkan payroll. Filter Harian akan ikut menghitung gaji pokok bulanan sehingga berisiko membayar gaji penuh berulang.",
+                                "Pilih filter Bulanan untuk slip dan pencairan gaji pokok bulanan. Filter Harian, Tahunan, atau Periodik tidak dipakai untuk mencairkan gaji pokok agar nominal tidak salah atau terbayar berulang.",
                                 color = MaterialTheme.colorScheme.error,
                                 fontSize = 11.sp
                             )

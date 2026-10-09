@@ -57,6 +57,7 @@ fun ProyekScreen(
     val projectPlans by viewModel.projectPlans.collectAsStateWithLifecycle()
     val housingUnits by viewModel.housingUnits.collectAsStateWithLifecycle()
     var showAddDialog by remember { mutableStateOf(false) }
+    var expandedProjectIds by remember { mutableStateOf(emptySet<String>()) }
     var projectName by remember { mutableStateOf("") }
     var category by remember { mutableStateOf(viewModel.masterProjectCategories.first()) }
     var businessModel by remember { mutableStateOf("Tidak berlaku") }
@@ -79,7 +80,7 @@ fun ProyekScreen(
     var soldBuyerName by remember { mutableStateOf("") }
 
     val settled = transactions.filter { it.status == "Selesai" }
-    val projectTransactions = settled.filter { it.project.isNotBlank() }
+    val projectTransactions = settled.filter { it.project.isNotBlank() && it.type in setOf("MASUK", "KELUAR") }
     val totalProjectIn = projectTransactions.filter { it.type == "MASUK" }.sumOf { it.amount }
     val totalProjectOut = projectTransactions.filter { it.type == "KELUAR" }.sumOf { it.amount }
     val activePlans = projectPlans.filter { it.status == "Direncanakan" }
@@ -161,6 +162,9 @@ fun ProyekScreen(
             } else {
                 items(projects, key = { it.id }) { project ->
                     val rows = projectTransactions.filter { it.project.equals(project.name, ignoreCase = true) }
+                    val expandedTransactions = project.id in expandedProjectIds
+                    val sortedProjectRows = rows.sortedWith(compareByDescending<com.example.data.model.TransactionEntity> { it.date }.thenByDescending { it.time })
+                    val visibleProjectRows = if (expandedTransactions) sortedProjectRows else sortedProjectRows.take(4)
                     val inflow = rows.filter { it.type == "MASUK" }.sumOf { it.amount }
                     val outflow = rows.filter { it.type == "KELUAR" }.sumOf { it.amount }
                     val remaining = project.budgetAmount - outflow
@@ -266,17 +270,28 @@ fun ProyekScreen(
                             }
 
                             if (project.notes.isNotBlank()) Text(project.notes, fontSize = 12.sp)
-                            if (rows.isEmpty()) Text("Belum ada transaksi aktual yang ditautkan ke proyek ini.", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            if (rows.isEmpty()) Text("Belum ada transaksi kas masuk/keluar aktual yang ditautkan ke proyek ini.", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             else {
                                 HorizontalDivider()
-                                Text("TRANSAKSI AKTUAL TERBARU", fontWeight = FontWeight.Bold, fontSize = 11.sp)
-                                rows.sortedWith(compareByDescending<com.example.data.model.TransactionEntity> { it.date }.thenByDescending { it.time }).take(4).forEach { tx ->
+                                Text(if (expandedTransactions) "BUKU KAS AKTUAL PROYEK (${rows.size} transaksi)" else "TRANSAKSI AKTUAL TERBARU", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                visibleProjectRows.forEach { tx ->
                                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                         Column(Modifier.weight(1f)) {
                                             Text(tx.name, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                                            Text("${tx.date} • ${tx.account} • ${tx.fundBucket}", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            Text("${tx.date} • ${tx.account}", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            Text("${tx.category} • Dana: ${tx.fundBucket}", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                         }
                                         Text((if (tx.type == "MASUK") "+" else "-") + formatRupiah(tx.amount), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                }
+                                if (rows.size > 4) {
+                                    TextButton(
+                                        onClick = {
+                                            expandedProjectIds = if (expandedTransactions) expandedProjectIds - project.id else expandedProjectIds + project.id
+                                        }
+                                    ) {
+                                        Text(if (expandedTransactions) "Ringkas transaksi" else "Lihat semua transaksi (${rows.size})")
                                     }
                                 }
                             }
