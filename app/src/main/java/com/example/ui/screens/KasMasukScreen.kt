@@ -67,8 +67,9 @@ fun KasMasukScreen(
     val accounts by viewModel.activeAccounts.collectAsStateWithLifecycle()
     val projects by viewModel.activeProjects.collectAsStateWithLifecycle()
     val transactions by viewModel.activeTransactions.collectAsStateWithLifecycle()
+    val ledgerTransactions by viewModel.ledgerTransactions.collectAsStateWithLifecycle()
     val kasMasukList = transactions.filter { it.type == "MASUK" }
-    val totalMasuk = kasMasukList.filter { it.status == "Selesai" }.sumOf { it.amount }
+    val totalMasuk = ledgerTransactions.filter { it.type == "MASUK" && it.status == "Selesai" }.sumOf { it.amount }
 
     val todayStr = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()) }
 
