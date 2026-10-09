@@ -480,10 +480,15 @@ class KasRepository(
     }
 
     suspend fun saveBudget(budget: BudgetEntity) {
+        val requestedBucket = budget.fundBucket.trim()
+        val normalizedBucket = listOf("PT", "Perdagangan", "Dana Talang", "Pribadi", "Darurat")
+            .firstOrNull { it.equals(requestedBucket, ignoreCase = true) } ?: requestedBucket
+        val requestedPeriod = budget.period.trim()
         val normalized = budget.copy(
+            period = if (requestedPeriod.equals("All", ignoreCase = true)) "All" else requestedPeriod,
             category = budget.category.trim(),
             project = budget.project.trim(),
-            fundBucket = budget.fundBucket.trim()
+            fundBucket = normalizedBucket
         )
         require(normalized.period.equals("All", ignoreCase = true) || normalized.period.matches(Regex("""\d{4}-\d{2}"""))) { "Periode anggaran harus YYYY-MM atau All." }
         require(normalized.category.isNotBlank()) { "Kategori anggaran wajib diisi." }
