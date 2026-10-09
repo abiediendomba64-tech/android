@@ -32,6 +32,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -63,7 +64,7 @@ fun TransferScreen(
     viewModel: KasViewModel,
     modifier: Modifier = Modifier
 ) {
-    val accounts by viewModel.accounts.collectAsStateWithLifecycle()
+    val accounts by viewModel.activeAccounts.collectAsStateWithLifecycle()
     val transactions by viewModel.activeTransactions.collectAsStateWithLifecycle()
     val transferList = transactions.filter { it.type == "TRANSFER" }
     val totalTransfer = transferList.filter { it.status == "Selesai" }.sumOf { it.amount }
@@ -87,6 +88,13 @@ fun TransferScreen(
     var amountError by remember { mutableStateOf<String?>(null) }
     var accountMatchError by remember { mutableStateOf<String?>(null) }
     var formErrorBanner by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(accountNames) {
+        if (fromAccount !in accountNames) fromAccount = accountNames.firstOrNull().orEmpty()
+        if (toAccount !in accountNames || toAccount == fromAccount) {
+            toAccount = accountNames.firstOrNull { it != fromAccount }.orEmpty()
+        }
+    }
 
     fun validate(): Boolean {
         var isValid = true
