@@ -10,6 +10,9 @@ import com.example.data.model.AuditLogEntity
 import com.example.data.model.BankReconEntity
 import com.example.data.model.BudgetEntity
 import com.example.data.model.EmployeeEntity
+import com.example.data.model.HousingUnitEntity
+import com.example.data.model.ProjectEntity
+import com.example.data.model.ProjectPlanEntity
 import com.example.data.model.TransactionEntity
 import com.example.data.repository.KasRepository
 import kotlinx.coroutines.async
@@ -728,4 +731,130 @@ class ExampleRobolectricTest {
         ).single().currentBalance
         assertEquals(500000.0, balance, 0.01)
     }
+
+    @Test
+    fun projectCalendarPlanDoesNotCreateActualCashTransaction() = runBlocking {
+        val project = ProjectEntity(
+            id = "PRJ-LAND-001",
+            name = "Pembebasan Tanah A",
+            category = "Pembebasan Tanah",
+            businessModel = "Tidak berlaku",
+            location = "Area A",
+            startDate = "2026-10-01",
+            targetEndDate = "2026-12-31",
+            budgetAmount = 150000000.0,
+            status = "Berjalan",
+            notes = "Jadwal dan biaya pembebasan tanah",
+            isActive = true,
+            createdAt = 1790812800000L
+        )
+        repository.saveProject(project)
+
+        val plan = ProjectPlanEntity(
+            id = "PLAN-LAND-001",
+            project = project.name,
+            planDate = "2026-10-15",
+            title = "Pembayaran tahap relokasi",
+            category = "Pembayaran",
+            estimatedAmount = 12000000.0,
+            status = "Direncanakan",
+            details = "Menunggu bukti dan persetujuan",
+            createdAt = 1790812800000L
+        )
+        repository.saveProjectPlan(plan)
+
+        assertEquals(project.name, db.projectDao().getProjectById(project.id)?.name)
+        assertEquals(plan.title, db.projectPlanDao().getPlanById(plan.id)?.title)
+        assertTrue(db.transactionDao().getAllActiveTransactions().first().isEmpty())
+    }
+
+    @Test
+    fun housingUnitStatusDoesNotFabricateSalesRevenue() = runBlocking {
+        val project = ProjectEntity(
+            id = "PRJ-HOUSE-001",
+            name = "Perumahan Subsidi A",
+            category = "Perumahan",
+            businessModel = "Subsidi",
+            location = "Kawasan A",
+            startDate = "2026-10-01",
+            targetEndDate = "2027-12-31",
+            budgetAmount = 2500000000.0,
+            status = "Berjalan",
+            notes = "Daftar unit per blok sesuai site plan",
+            isActive = true,
+            createdAt = 1790812800000L
+        )
+        repository.saveProject(project)
+        val unit = HousingUnitEntity(
+            id = "UNIT-HOUSE-A1",
+            project = project.name,
+            unitCode = "A1",
+            block = "A",
+            sitePosition = "A1",
+            businessModel = "Subsidi",
+            landAreaM2 = 60.0,
+            buildingAreaM2 = 30.0,
+            salePrice = 166000000.0,
+            buyerName = "",
+            status = "Tersedia",
+            notes = "Data inventaris unit, bukan penerimaan kas",
+            createdAt = 1790812800000L
+        )
+        repository.saveHousingUnit(unit)
+        repository.updateHousingUnitStatus(unit.id, "Terjual", "Pembeli Test")
+
+        assertEquals("Terjual", db.housingUnitDao().getUnitById(unit.id)?.status)
+        assertEquals("Pembeli Test", db.housingUnitDao().getUnitById(unit.id)?.buyerName)
+        assertTrue(db.transactionDao().getAllActiveTransactions().first().isEmpty())
+    }
+
+    @Test
+    fun payrollDisbursementSplitsActualCashOutflowByProject() = runBlocking {
+        db.accountDao().insertAccount(AccountEntity("acc-pay-projects", "Kas Payroll", "Kas", 5000000.0))
+        val projectA = ProjectEntity(
+            id = "PRJ-PAY-LAND",
+            name = "Cut Fill A",
+            category = "Cut & Fill",
+            businessModel = "Tidak berlaku",
+            location = "",
+            startDate = "2026-10-01",
+            targetEndDate = "2026-12-31",
+            budgetAmount = 500000000.0,
+            status = "Berjalan",
+            notes = "",
+            isActive = true,
+            createdAt = 1790812800000L
+        )
+        val projectB = ProjectEntity(
+            id = "PRJ-PAY-HOUSE",
+            name = "Perumahan Komersial B",
+            category = "Perumahan",
+            businessModel = "Komersial",
+            location = "",
+            startDate = "2026-10-01",
+            targetEndDate = "2027-12-31",
+            budgetAmount = 3000000000.0,
+            status = "Berjalan",
+            notes = "",
+            isActive = true,
+            createdAt = 1790812800000L
+        )
+        repository.saveProject(projectA)
+        repository.saveProject(projectB)
+
+        repository.savePayrollDisbursement(
+            period = "2026-11",
+            totalAmount = 3000000.0,
+            accountName = "Kas Payroll",
+            allocationsByProject = mapOf(projectA.name to 2000000.0, projectB.name to 1000000.0)
+        )
+
+        val payrollTransactions = db.transactionDao().getAllActiveTransactions().first()
+            .filter { it.category == "Gaji" && it.receiptNo == "PAYROLL-2026-11" }
+        assertEquals(2, payrollTransactions.size)
+        assertEquals(3000000.0, payrollTransactions.sumOf { it.amount }, 0.01)
+        assertEquals(2000000.0, payrollTransactions.filter { it.project == projectA.name }.sumOf { it.amount }, 0.01)
+        assertEquals(1000000.0, payrollTransactions.filter { it.project == projectB.name }.sumOf { it.amount }, 0.01)
+    }
+
 }
