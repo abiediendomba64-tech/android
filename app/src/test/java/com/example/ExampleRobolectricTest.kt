@@ -49,7 +49,10 @@ class ExampleRobolectricTest {
             employeeDao = db.employeeDao(),
             attendanceDao = db.attendanceDao(),
             auditDao = db.auditDao(),
-            bankReconDao = db.bankReconDao()
+            bankReconDao = db.bankReconDao(),
+            projectDao = db.projectDao(),
+            projectPlanDao = db.projectPlanDao(),
+            housingUnitDao = db.housingUnitDao()
         )
     }
 
