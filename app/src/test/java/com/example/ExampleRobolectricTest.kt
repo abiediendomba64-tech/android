@@ -353,6 +353,16 @@ class ExampleRobolectricTest {
 
 
     @Test
+    fun transactionAccountStreamExcludesInactiveAccountsButHistoryStreamKeepsThem() = runBlocking {
+        db.accountDao().insertAccounts(listOf(
+            AccountEntity("acc-active-picker", "Kas Aktif", "Kas", 100000.0, isActive = true),
+            AccountEntity("acc-inactive-picker", "Bank Nonaktif", "Bank", 200000.0, isActive = false)
+        ))
+        assertEquals(listOf("Kas Aktif"), repository.activeAccounts.first().map { it.name })
+        assertEquals(setOf("Kas Aktif", "Bank Nonaktif"), repository.accounts.first().map { it.name }.toSet())
+    }
+
+    @Test
     fun periodAndAccountIdentityRulesAreEnforced() = runBlocking {
         repository.saveBudget(BudgetEntity(period = "2026-10", category = "Operasional", budgetAmount = 1000000.0))
         db.accountDao().insertAccount(AccountEntity("acc-1", "Kas Tunai", "Kas", 0.0))
