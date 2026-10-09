@@ -49,6 +49,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.KasViewModel
 import com.example.ui.components.EmptyStateView
 import com.example.ui.components.FormDropdown
+import com.example.ui.components.IsoDatePickerField
 import com.example.ui.components.TransactionRowItem
 import com.example.ui.components.formatRupiah
 import com.example.ui.theme.ExpenseRed
@@ -62,6 +63,7 @@ fun KasKeluarScreen(
     modifier: Modifier = Modifier
 ) {
     val accounts by viewModel.accounts.collectAsStateWithLifecycle()
+    val projects by viewModel.activeProjects.collectAsStateWithLifecycle()
     val transactions by viewModel.activeTransactions.collectAsStateWithLifecycle()
     val kasKeluarList = transactions.filter { it.type == "KELUAR" }
     val totalKeluar = kasKeluarList.filter { it.status == "Selesai" }.sumOf { it.amount }
@@ -79,6 +81,7 @@ fun KasKeluarScreen(
     var proofUrl by remember { mutableStateOf("") }
     var receiptNo by remember { mutableStateOf("") }
     var project by remember { mutableStateOf("") }
+    var fundBucket by remember { mutableStateOf("PT") }
     var note by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("Selesai") }
 
