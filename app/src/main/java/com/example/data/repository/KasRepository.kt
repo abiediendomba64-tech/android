@@ -298,6 +298,10 @@ class KasRepository(
     suspend fun bulkMarkAllEmployeesHadir(date: String) {
         database.withTransaction {
             requireIsoDate(date, "Tanggal absensi")
+            val paidPayroll = paidPayrollCoveringDate(date)
+            require(paidPayroll == null) {
+                "Absensi tanggal $date tidak dapat ditambahkan karena payroll ${paidPayroll?.receiptNo?.removePrefix("PAYROLL-")} sudah dicairkan."
+            }
             val allEmployees = employeeDao.getAllEmployeesList()
             allEmployees.forEach { emp ->
                 if (attendanceDao.getAttendanceByEmployeeAndDate(emp.id, date) == null) {
@@ -491,6 +495,7 @@ class KasRepository(
             fundBucket = normalizedBucket
         )
         require(normalized.period.equals("All", ignoreCase = true) || normalized.period.matches(Regex("""\d{4}-\d{2}"""))) { "Periode anggaran harus YYYY-MM atau All." }
+        if (!normalized.period.equals("All", ignoreCase = true)) periodEndDate(normalized.period)
         require(normalized.category.isNotBlank()) { "Kategori anggaran wajib diisi." }
         require(normalized.budgetAmount.isFinite() && normalized.budgetAmount >= 0.0) { "Nominal anggaran tidak valid." }
         require(normalized.fundBucket in setOf("PT", "Perdagangan", "Dana Talang", "Pribadi", "Darurat")) { "Kelompok dana tidak valid." }
@@ -722,6 +727,10 @@ class KasRepository(
             require(attendance.employeeId.isNotBlank()) { "ID karyawan wajib diisi." }
             require(employeeDao.getEmployeeById(attendance.employeeId) != null) { "Karyawan tidak ditemukan." }
             requireIsoDate(attendance.date, "Tanggal absensi")
+            val paidPayroll = paidPayrollCoveringDate(attendance.date)
+            require(paidPayroll == null) {
+                "Absensi tanggal ${attendance.date} tidak dapat ditambahkan karena payroll ${paidPayroll?.receiptNo?.removePrefix("PAYROLL-")} sudah dicairkan."
+            }
             require(attendance.status in setOf("Hadir", "Izin", "Sakit", "Alpa", "Cuti")) {
                 "Status absensi tidak valid."
             }
@@ -753,13 +762,7 @@ class KasRepository(
         database.withTransaction {
             val attendance = attendanceDao.getAttendanceById(id)
                 ?: throw IllegalArgumentException("Catatan absensi $id tidak ditemukan.")
-            val payrollTransactions = (transactionDao.getAllActiveTransactions().first() + transactionDao.getArchivedTransactions().first())
-                .filter { it.category == "Gaji" && it.status == "Selesai" && it.receiptNo.startsWith("PAYROLL-") }
-            val overlappingPayroll = payrollTransactions.firstOrNull { payrollTx ->
-                val paidPeriod = payrollTx.receiptNo.removePrefix("PAYROLL-")
-                val range = runCatching { payrollPeriodRange(paidPeriod) }.getOrNull()
-                range != null && attendance.date >= range.first && attendance.date <= range.second
-            }
+            val overlappingPayroll = paidPayrollCoveringDate(attendance.date)
             require(overlappingPayroll == null) {
                 "Absensi tanggal ${attendance.date} tidak dapat dihapus karena termasuk periode payroll ${overlappingPayroll?.receiptNo?.removePrefix("PAYROLL-")} yang sudah dicairkan. Catat koreksi sebagai transaksi penyesuaian."
             }
@@ -772,6 +775,16 @@ class KasRepository(
                 user = "Admin Absensi",
                 verifiedFormulaStatus = "RECORDED"
             ))
+        }
+    }
+
+    private suspend fun paidPayrollCoveringDate(date: String): TransactionEntity? {
+        val payrollTransactions = (transactionDao.getAllActiveTransactions().first() + transactionDao.getArchivedTransactions().first())
+            .filter { it.category == "Gaji" && it.status == "Selesai" && it.receiptNo.startsWith("PAYROLL-") }
+        return payrollTransactions.firstOrNull { payrollTx ->
+            val paidPeriod = payrollTx.receiptNo.removePrefix("PAYROLL-")
+            val range = runCatching { payrollPeriodRange(paidPeriod) }.getOrNull()
+            range != null && date >= range.first && date <= range.second
         }
     }
 
@@ -1873,6 +1886,7 @@ class KasRepository(
 
                 budgets.forEach { budget ->
                     require(budget.period.equals("All", ignoreCase = true) || budget.period.matches(Regex("""\d{4}-\d{2}"""))) { "Backup memiliki periode anggaran tidak valid: ${budget.period}." }
+                    if (!budget.period.equals("All", ignoreCase = true)) periodEndDate(budget.period)
                     require(budget.category.isNotBlank()) { "Backup memiliki kategori anggaran kosong." }
                     require(budget.budgetAmount.isFinite() && budget.budgetAmount >= 0.0) { "Backup memiliki nominal anggaran tidak valid." }
                     require(budget.fundBucket in setOf("PT", "Perdagangan", "Dana Talang", "Pribadi", "Darurat")) { "Kelompok dana anggaran backup tidak valid." }

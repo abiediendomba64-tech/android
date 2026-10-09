@@ -473,6 +473,7 @@ fun AbsensiScreen(
                                     Spacer(modifier = Modifier.width(6.dp))
                                     OutlinedButton(
                                         onClick = { selectedEmployeeForPayslip = emp },
+                                        enabled = !(emp.monthlySalary > 0.0 && filterMode != "Bulanan"),
                                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                                         shape = RoundedCornerShape(6.dp)
                                     ) {

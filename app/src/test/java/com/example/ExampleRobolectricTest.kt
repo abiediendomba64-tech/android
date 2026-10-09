@@ -1234,6 +1234,50 @@ class ExampleRobolectricTest {
     }
 
     @Test
+    fun attendanceCannotBeAddedAfterItsPayrollPeriodWasDisbursed() = runBlocking {
+        db.accountDao().insertAccount(AccountEntity("acc-att-payroll-closed", "Kas Payroll", "Kas", 1000000.0))
+        val employee = EmployeeEntity(
+            id = "EMP-ATT-PAYROLL-CLOSED",
+            name = "Karyawan Periode Terkunci",
+            position = "Staf",
+            department = "Operasional",
+            phone = "",
+            dailyRate = 100000.0,
+            monthlySalary = 0.0
+        )
+        repository.saveEmployee(employee)
+        repository.savePayrollDisbursement(
+            period = "2026-10",
+            totalAmount = 100000.0,
+            accountName = "Kas Payroll",
+            allocationsByProject = mapOf("" to 100000.0)
+        )
+        val attendance = AttendanceEntity(
+            id = "ATT-ATT-PAYROLL-CLOSED",
+            employeeId = employee.id,
+            employeeName = employee.name,
+            department = employee.department,
+            date = "2026-10-12",
+            status = "Hadir",
+            dailyAllowance = employee.dailyRate
+        )
+        try {
+            repository.saveAttendance(attendance)
+            throw AssertionError("Absensi tidak boleh ditambahkan setelah periode payroll dibayar.")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message?.contains("tidak dapat ditambahkan karena payroll") == true)
+        }
+        assertTrue(db.attendanceDao().getAllAttendances().first().isEmpty())
+        try {
+            repository.bulkMarkAllEmployeesHadir("2026-10-12")
+            throw AssertionError("Absensi cepat tidak boleh melewati periode payroll yang sudah dibayar.")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message?.contains("tidak dapat ditambahkan karena payroll") == true)
+        }
+        assertTrue(db.attendanceDao().getAllAttendances().first().isEmpty())
+    }
+
+    @Test
     fun payrollDisbursementRejectsOverlappingPeriodsAndPreventsDoublePayment() = runBlocking {
         db.accountDao().insertAccount(AccountEntity("acc-payroll-overlap", "Kas Payroll Overlap", "Kas", 5000000.0))
         repository.savePayrollDisbursement(
