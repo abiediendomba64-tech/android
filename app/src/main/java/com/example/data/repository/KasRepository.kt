@@ -201,6 +201,11 @@ class KasRepository(
         require(accountDao.getAccountByName(transaction.account)?.isActive == true) {
             "Akun " + transaction.account + " tidak terdaftar atau nonaktif."
         }
+        if (transaction.project.isNotBlank()) {
+            require(projectDao.getProjectByName(transaction.project) != null) {
+                "Proyek transaksi tidak terdaftar: " + transaction.project
+            }
+        }
         if (transaction.isArchived) {
             require(transaction.archivedAt != null && transaction.archivedAt > 0L) { "Transaksi arsip harus memiliki waktu arsip." }
             require(transaction.archivedBy?.isNotBlank() == true) { "Transaksi arsip harus memiliki pengarsip." }
@@ -488,8 +493,12 @@ class KasRepository(
         requireIsoDate(receivable.dueDate, "Tanggal jatuh tempo")
         require(receivable.status in setOf("Belum Jatuh Tempo", "Jatuh Tempo", "Lunas")) { "Status tagihan tidak valid." }
         require(accountDao.getAccountByName(receivable.targetAccount)?.isActive == true) { "Akun terkait tidak terdaftar atau nonaktif." }
+        require(receivable.fundBucket in setOf("PT", "Perdagangan", "Dana Talang", "Pribadi", "Darurat")) { "Kelompok dana tagihan tidak valid." }
+        if (receivable.project.isNotBlank()) require(projectDao.getProjectByName(receivable.project)?.isActive == true) {
+            "Proyek tagihan tidak terdaftar atau nonaktif."
+        }
         val normalizedStatus = if (receivable.paidAmount >= receivable.totalAmount) "Lunas" else receivable.status
-        receivableDao.insertReceivable(receivable.copy(status = normalizedStatus))
+        receivableDao.insertReceivable(receivable.copy(status = normalizedStatus, project = receivable.project.trim()))
     }
 
     suspend fun payReceivable(id: String, paymentAmount: Double, targetAccount: String, pic: String = "Bendahara") {
@@ -517,6 +526,8 @@ class KasRepository(
                 allocation = "Operasional",
                 pic = pic,
                 receiptNo = "PIU-${current.id}",
+                project = current.project,
+                fundBucket = current.fundBucket,
                 status = "Selesai"
             )
             insertValidatedTransaction(tx)
@@ -548,6 +559,8 @@ class KasRepository(
                 allocation = "Operasional",
                 pic = pic,
                 receiptNo = "HUT-${current.id}",
+                project = current.project,
+                fundBucket = current.fundBucket,
                 status = "Selesai"
             )
             insertValidatedTransaction(tx)
@@ -557,25 +570,49 @@ class KasRepository(
     suspend fun updateTransaction(newTx: TransactionEntity, oldTx: TransactionEntity) {
         database.withTransaction {
             require(transactionDao.getTransactionById(newTx.id) != null) { "Transaksi ${newTx.id} tidak ditemukan." }
+            val actualOld = transactionDao.getTransactionById(newTx.id)
+                ?: throw IllegalArgumentException("Transaksi ${newTx.id} tidak ditemukan.")
+            require(oldTx.id == actualOld.id) { "ID transaksi lama dan baru tidak cocok." }
             validateTransaction(newTx)
             transactionDao.updateTransaction(newTx)
+            val postBalance = accountDao.getAccountByName(newTx.account)?.let { account ->
+                account.initialBalance + transactionDao.sumSettledAccountMovement(account.name)
+            } ?: 0.0
             val nowStamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
             auditDao.insertAuditLog(
                 AuditLogEntity(
                     dateFormatted = nowStamp,
                     action = "UPDATE_TRANSACTION",
                     recordId = newTx.id,
-                    details = "Perubahan transaksi ${newTx.id}: [Lama: ${oldTx.name}, Rp ${oldTx.amount.toLong()}, ${oldTx.account}] -> [Baru: ${newTx.name}, Rp ${newTx.amount.toLong()}, ${newTx.account}]",
+                    details = "Perubahan transaksi ${newTx.id}: [Lama: ${actualOld.name}, Rp ${actualOld.amount.toLong()}, ${actualOld.account}] -> [Baru: ${newTx.name}, Rp ${newTx.amount.toLong()}, ${newTx.account}]",
                     user = "Admin",
                     verifiedFormulaStatus = "RECORDED",
-                    balanceAfter = 0.0
+                    balanceAfter = postBalance
                 )
             )
         }
     }
 
     suspend fun deleteReceivable(id: String) {
-        receivableDao.deleteReceivable(id)
+        database.withTransaction {
+            val current = receivableDao.getReceivableById(id)
+                ?: throw IllegalArgumentException("Tagihan $id tidak ditemukan.")
+            val receiptPrefix = if (current.type == "PIUTANG") "PIU-" else "HUT-"
+            val category = if (current.type == "PIUTANG") "Piutang Masuk" else "Belanja Barang"
+            val linkedPayments = transactionDao.countByCategoryAndReceiptNo(category, receiptPrefix + id)
+            require(current.paidAmount <= 0.0 && linkedPayments == 0) {
+                "Tagihan $id sudah memiliki pembayaran di ledger. Data tidak dihapus agar histori kas tetap cocok."
+            }
+            receivableDao.deleteReceivable(id)
+            auditDao.insertAuditLog(AuditLogEntity(
+                dateFormatted = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()),
+                action = "DELETE_RECEIVABLE",
+                recordId = id,
+                details = "Tagihan tanpa pembayaran dihapus; pihak " + current.customerName + ", jenis " + current.type + ".",
+                user = "Admin",
+                verifiedFormulaStatus = "RECORDED"
+            ))
+        }
     }
 
     suspend fun saveNote(note: CashNoteEntity) {
@@ -681,7 +718,23 @@ class KasRepository(
     }
 
     suspend fun deleteAttendance(id: String) {
-        attendanceDao.deleteAttendance(id)
+        database.withTransaction {
+            val attendance = attendanceDao.getAttendanceById(id)
+                ?: throw IllegalArgumentException("Catatan absensi $id tidak ditemukan.")
+            val period = attendance.date.take(7)
+            require(transactionDao.countByCategoryAndReceiptNo("Gaji", "PAYROLL-$period") == 0) {
+                "Absensi tanggal ${attendance.date} tidak dapat dihapus karena payroll periode $period sudah dicairkan. Catat koreksi sebagai transaksi penyesuaian."
+            }
+            attendanceDao.deleteAttendance(id)
+            auditDao.insertAuditLog(AuditLogEntity(
+                dateFormatted = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()),
+                action = "DELETE_ATTENDANCE",
+                recordId = id,
+                details = "Catatan absensi " + attendance.employeeName + " tanggal " + attendance.date + " dihapus sebelum pencairan payroll.",
+                user = "Admin Absensi",
+                verifiedFormulaStatus = "RECORDED"
+            ))
+        }
     }
 
     suspend fun savePayrollDisbursement(
@@ -1179,7 +1232,7 @@ class KasRepository(
     ): String {
         val root = JSONObject()
         root.put("app", "Sistem Kas")
-        root.put("version", "5.0")
+        root.put("version", "6.0")
         root.put("timestamp", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()))
 
         val txArray = JSONArray()
@@ -1222,6 +1275,7 @@ class KasRepository(
                 put("type", acc.type)
                 put("initialBalance", acc.initialBalance)
                 put("colorHex", acc.colorHex)
+                put("isActive", acc.isActive)
             }
             accArray.put(obj)
         }
@@ -1255,6 +1309,8 @@ class KasRepository(
                 put("targetAccount", item.targetAccount)
                 put("notes", item.notes)
                 put("status", item.status)
+                put("project", item.project)
+                put("fundBucket", item.fundBucket)
             })
         }
         root.put("receivables", receivableArray)
@@ -1275,7 +1331,7 @@ class KasRepository(
         root.put("notes", noteArray)
 
         val employeeArray = JSONArray()
-        employeeDao.getAllEmployeesList().forEach { employee ->
+        employeeDao.getAllEmployees().first().forEach { employee ->
             employeeArray.put(JSONObject().apply {
                 put("id", employee.id)
                 put("name", employee.name)
@@ -1416,7 +1472,7 @@ class KasRepository(
                         type = o.getString("type"),
                         initialBalance = o.getDouble("initialBalance"),
                         colorHex = o.getString("colorHex"),
-                        isActive = o.getBoolean("isActive")
+                        isActive = o.optBoolean("isActive", true)
                     )
                 }
             }
@@ -1454,7 +1510,9 @@ class KasRepository(
                         paidAmount = o.getDouble("paidAmount"),
                         targetAccount = o.getString("targetAccount"),
                         notes = o.getString("notes"),
-                        status = o.getString("status")
+                        status = o.getString("status"),
+                        project = o.optString("project", ""),
+                        fundBucket = o.optString("fundBucket", "PT")
                     )
                 }
             }
@@ -1748,6 +1806,8 @@ class KasRepository(
                     require(receivable.totalAmount.isFinite() && receivable.totalAmount > 0.0) { "Nominal tagihan ${receivable.id} tidak valid." }
                     require(receivable.paidAmount.isFinite() && receivable.paidAmount >= 0.0 && receivable.paidAmount <= receivable.totalAmount) { "Pembayaran tagihan ${receivable.id} tidak valid." }
                     require(accountDao.getAccountByName(receivable.targetAccount)?.isActive == true) { "Akun tagihan ${receivable.id} tidak terdaftar atau nonaktif." }
+                    require(receivable.fundBucket in setOf("PT", "Perdagangan", "Dana Talang", "Pribadi", "Darurat")) { "Kelompok dana tagihan backup tidak valid." }
+                    if (receivable.project.isNotBlank()) require(projectDao.getProjectByName(receivable.project) != null) { "Proyek tagihan backup tidak ditemukan: " + receivable.project }
                 }
                 if (receivables.isNotEmpty()) receivableDao.insertReceivables(
                     receivables.map { r -> r.copy(status = if (r.paidAmount >= r.totalAmount) "Lunas" else r.status) }

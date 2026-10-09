@@ -27,6 +27,7 @@ import com.example.data.repository.DashboardKpis
 import com.example.data.repository.KasRepository
 import com.example.data.repository.PayrollCalculation
 import com.example.ui.components.formatRupiah
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -175,6 +176,25 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
     private val _snackBarMessage = MutableSharedFlow<String>()
     val snackBarMessage: SharedFlow<String> = _snackBarMessage
 
+    /**
+     * All user-triggered writes pass through this boundary so repository validation
+     * errors become visible messages rather than uncaught viewModelScope failures.
+     */
+    private fun launchSafely(block: suspend () -> Unit) {
+        viewModelScope.launch {
+            try {
+                block()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                _snackBarMessage.emit(
+                    failure.message?.takeIf { it.isNotBlank() }
+                        ?: "Operasi gagal. Data tidak disimpan."
+                )
+            }
+        }
+    }
+
     // Master dropdown lists used by the app.
     val masterKategoriMasuk = listOf(
         "Penjualan", "Piutang Masuk", "Modal", "Pendapatan Lain", "Transfer Masuk", "Lainnya"
@@ -224,7 +244,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         fundBucket: String = "PT",
         onSuccess: () -> Unit = {}
     ) {
-        viewModelScope.launch {
+        launchSafely {
             val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
             val id = repository.generateId("KM")
             val tx = TransactionEntity(
@@ -269,7 +289,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         fundBucket: String = "PT",
         onSuccess: () -> Unit = {}
     ) {
-        viewModelScope.launch {
+        launchSafely {
             val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
             val id = repository.generateId("KK")
             val tx = TransactionEntity(
@@ -311,10 +331,10 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         fundBucket: String = "PT",
         onSuccess: () -> Unit = {}
     ) {
-        viewModelScope.launch {
+        launchSafely {
             if (fromAccount == toAccount) {
                 _snackBarMessage.emit("Akun asal dan akun tujuan tidak boleh sama.")
-                return@launch
+                return@launchSafely
             }
             val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
             val id = repository.generateId("TR")
@@ -344,14 +364,14 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun arsipkanTransaksi(tx: TransactionEntity) {
-        viewModelScope.launch {
+        launchSafely {
             repository.archiveTransaction(tx.id)
             _snackBarMessage.emit("Transaksi ${tx.id} dipindahkan ke Transaksi_Dihapus (Audit Trail aktif).")
         }
     }
 
     fun editTransaksi(newTx: TransactionEntity, oldTx: TransactionEntity, onSuccess: () -> Unit = {}) {
-        viewModelScope.launch {
+        launchSafely {
             repository.updateTransaction(newTx, oldTx)
             _snackBarMessage.emit("Transaksi ${newTx.id} berhasil diperbarui (Tercatat dalam Log Audit).")
             onSuccess()
@@ -359,26 +379,26 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun pulihkanTransaksi(id: String) {
-        viewModelScope.launch {
+        launchSafely {
             repository.restoreTransaction(id)
             _snackBarMessage.emit("Transaksi $id berhasil dipulihkan.")
         }
     }
 
     fun hapusPermanen(id: String) {
-        viewModelScope.launch {
+        launchSafely {
             _snackBarMessage.emit("Penghapusan permanen transaksi dinonaktifkan untuk menjaga histori ledger.")
         }
     }
 
     fun kosongkanArsip() {
-        viewModelScope.launch {
+        launchSafely {
             _snackBarMessage.emit("Pengosongan arsip permanen dinonaktifkan agar histori ledger tetap utuh.")
         }
     }
 
     fun tambahAkun(name: String, type: String, initialBalance: Double, colorHex: String) {
-        viewModelScope.launch {
+        launchSafely {
             val id = repository.generateId("ACC")
             val acc = AccountEntity(id, name, type, initialBalance, colorHex)
             repository.saveAccount(acc)
@@ -387,7 +407,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun hapusAkun(id: String) {
-        viewModelScope.launch {
+        launchSafely {
             val physicallyDeleted = repository.deleteAccount(id)
             _snackBarMessage.emit(
                 if (physicallyDeleted) "Akun berhasil dihapus."
@@ -404,14 +424,14 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         project: String = "",
         fundBucket: String = "PT"
     ) {
-        viewModelScope.launch {
+        launchSafely {
             repository.saveBudget(BudgetEntity(period = period, category = category, budgetAmount = amount, notes = notes, project = project, fundBucket = fundBucket))
             _snackBarMessage.emit("Alokasi anggaran untuk $category ($period) berhasil disimpan.")
         }
     }
 
     fun hapusAnggaran(id: Long) {
-        viewModelScope.launch {
+        launchSafely {
             repository.deleteBudget(id)
             _snackBarMessage.emit("Anggaran dihapus.")
         }
@@ -423,9 +443,11 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         totalAmount: Double,
         dueDate: String,
         targetAccount: String,
-        notes: String
+        notes: String,
+        project: String = "",
+        fundBucket: String = "PT"
     ) {
-        viewModelScope.launch {
+        launchSafely {
             val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
             val id = repository.generateId("PT")
             val r = ReceivableEntity(
@@ -437,7 +459,9 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
                 dueDate = dueDate,
                 targetAccount = targetAccount,
                 notes = notes,
-                status = "Belum Jatuh Tempo"
+                status = "Belum Jatuh Tempo",
+                project = project,
+                fundBucket = fundBucket
             )
             repository.saveReceivable(r)
             _snackBarMessage.emit("Piutang $customerName ($id) berhasil dicatat.")
@@ -445,14 +469,14 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun bayarPiutang(id: String, amount: Double, targetAccount: String) {
-        viewModelScope.launch {
+        launchSafely {
             repository.payReceivable(id, amount, targetAccount)
             _snackBarMessage.emit("Pelunasan piutang Rp ${amount.toLong()} dicatat ke $targetAccount.")
         }
     }
 
     fun hapusPiutang(id: String) {
-        viewModelScope.launch {
+        launchSafely {
             repository.deleteReceivable(id)
             _snackBarMessage.emit("Data piutang/hutang berhasil dihapus dari basis data.")
         }
@@ -464,9 +488,11 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         totalAmount: Double,
         dueDate: String,
         sourceAccount: String,
-        notes: String
+        notes: String,
+        project: String = "",
+        fundBucket: String = "PT"
     ) {
-        viewModelScope.launch {
+        launchSafely {
             val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
             val id = repository.generateId("HT")
             val r = ReceivableEntity(
@@ -479,7 +505,9 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
                 dueDate = dueDate,
                 targetAccount = sourceAccount,
                 notes = notes,
-                status = "Belum Jatuh Tempo"
+                status = "Belum Jatuh Tempo",
+                project = project,
+                fundBucket = fundBucket
             )
             repository.saveReceivable(r)
             _snackBarMessage.emit("Hutang kepada $supplierName ($id) berhasil dicatat.")
@@ -487,7 +515,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun bayarHutang(id: String, amount: Double, sourceAccount: String) {
-        viewModelScope.launch {
+        launchSafely {
             repository.payHutang(id, amount, sourceAccount)
             _snackBarMessage.emit("Pembayaran hutang Rp ${amount.toLong()} dicatat dari $sourceAccount (Kas Keluar).")
         }
@@ -502,14 +530,14 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         date: String = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()),
         project: String = ""
     ) {
-        viewModelScope.launch {
+        launchSafely {
             repository.saveNote(CashNoteEntity(date = date, title = title, content = content, pic = pic, priority = priority, status = status, project = project))
             _snackBarMessage.emit("Catatan kas disimpan.")
         }
     }
 
     fun hapusCatatan(id: Long) {
-        viewModelScope.launch {
+        launchSafely {
             repository.deleteNote(id)
             _snackBarMessage.emit("Catatan dihapus.")
         }
@@ -525,7 +553,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         monthlySalary: Double,
         defaultProject: String = ""
     ) {
-        viewModelScope.launch {
+        launchSafely {
             val id = repository.generateId("EMP")
             val emp = EmployeeEntity(id, name, position, department, phone, dailyRate, monthlySalary, true, defaultProject)
             repository.saveEmployee(emp)
@@ -546,7 +574,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         notes: String,
         project: String = ""
     ) {
-        viewModelScope.launch {
+        launchSafely {
             val id = "ATT-${date.replace("-", "")}-$employeeId"
             val att = AttendanceEntity(
                 id = id,
@@ -568,21 +596,21 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun absensiCepatSemuaHadir(date: String) {
-        viewModelScope.launch {
+        launchSafely {
             repository.bulkMarkAllEmployeesHadir(date)
             _snackBarMessage.emit("Seluruh karyawan berhasil diabsen Hadir untuk tanggal $date.")
         }
     }
 
     fun hapusAbsensi(id: String) {
-        viewModelScope.launch {
+        launchSafely {
             repository.deleteAttendance(id)
             _snackBarMessage.emit("Catatan absensi berhasil dihapus.")
         }
     }
 
     fun jalankanAuditSistem(onComplete: (String) -> Unit = {}) {
-        viewModelScope.launch {
+        launchSafely {
             val result = repository.runIntegrityAudit(
                 accounts = accounts.value,
                 transactions = ledgerTransactions.value,
@@ -638,7 +666,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         accountName: String,
         onSuccess: () -> Unit
     ) {
-        viewModelScope.launch {
+        launchSafely {
             val allocationsByProject = repository.calculatePayrollAllocations(
                 employees = employees.value,
                 attendances = filteredAttendances.value
@@ -665,7 +693,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         budgetAmount: Double,
         notes: String
     ) {
-        viewModelScope.launch {
+        launchSafely {
             val project = ProjectEntity(
                 id = repository.generateId("PRJ"),
                 name = name.trim(),
@@ -693,7 +721,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         estimatedAmount: Double,
         details: String
     ) {
-        viewModelScope.launch {
+        launchSafely {
             val plan = ProjectPlanEntity(
                 id = repository.generateId("PLAN"),
                 project = project.trim(),
@@ -722,7 +750,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         buyerName: String,
         notes: String
     ) {
-        viewModelScope.launch {
+        launchSafely {
             val project = activeProjects.value.firstOrNull { it.name.equals(projectName, ignoreCase = true) }
                 ?: throw IllegalArgumentException("Pilih proyek perumahan aktif terlebih dahulu.")
             require(project.category == "Perumahan") { "Unit/kavling hanya dapat ditambahkan ke proyek perumahan." }
@@ -747,14 +775,14 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun ubahStatusUnit(id: String, status: String, buyerName: String = "") {
-        viewModelScope.launch {
+        launchSafely {
             repository.updateHousingUnitStatus(id, status, buyerName)
             _snackBarMessage.emit("Status unit diperbarui. Pendapatan tetap perlu dicatat sebagai transaksi kas masuk.")
         }
     }
 
     fun ubahStatusRencana(id: String, status: String) {
-        viewModelScope.launch {
+        launchSafely {
             repository.updateProjectPlanStatus(id, status)
             _snackBarMessage.emit("Status rencana diperbarui. Arus kas aktual tetap hanya berasal dari transaksi.")
         }
@@ -772,7 +800,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         statementBalance: Double,
         notes: String
     ) {
-        viewModelScope.launch {
+        launchSafely {
             val id = "REC-${accountName.replace(" ", "_")}-${period}"
             val recon = BankReconEntity(
                 id = id,
@@ -853,7 +881,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun hapusKaryawan(id: String) {
-        viewModelScope.launch {
+        launchSafely {
             val physicallyDeleted = repository.deleteEmployee(id)
             _snackBarMessage.emit(
                 if (physicallyDeleted) "Data karyawan berhasil dihapus."

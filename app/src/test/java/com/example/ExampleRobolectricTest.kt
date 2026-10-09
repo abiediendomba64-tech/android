@@ -322,6 +322,20 @@ class ExampleRobolectricTest {
     @Test
     fun spreadsheetImportParsesQuotedCommaAndDecimalAndRejectsDuplicateId() = runBlocking {
         db.accountDao().insertAccount(AccountEntity("csv-account", "Kas Tunai", "Kas", 0.0))
+        repository.saveProject(ProjectEntity(
+            id = "PRJ-CSV-001",
+            name = "P-01",
+            category = "Lainnya",
+            businessModel = "Tidak berlaku",
+            location = "",
+            startDate = "2026-10-01",
+            targetEndDate = "2026-12-31",
+            budgetAmount = 0.0,
+            status = "Berjalan",
+            notes = "",
+            isActive = true,
+            createdAt = 1790812800000L
+        ))
 
         val csv = "\uFEFFID,Tipe,Tanggal,Jam,Akun,Ke Akun,Nama Transaksi,Kategori,Keterangan,Nominal,Alokasi,PIC,Bukti,No Bukti,Proyek,Catatan,Status,Waktu Input,Input Oleh,Diarsipkan,Waktu Arsip,Diarsipkan Oleh\n" +
             "TX-CSV-IMPORT-001,KELUAR,2026-10-07,10:00:00,Kas Tunai,,\"Belanja, ATK\",Operasional,\"Keterangan, lengkap\",1.250.000,Operasional,Admin,,INV-001,P-01,\"Catatan \"\"A\"\"\",Selesai,2026-10-07 10:00:00.000,Admin,TIDAK,,\n"
@@ -857,6 +871,251 @@ class ExampleRobolectricTest {
         assertEquals(1000000.0, payrollTransactions.filter { it.project == projectB.name }.sumOf { it.amount }, 0.01)
     }
 
+
+    @Test
+    fun jsonBackupRoundTripsInactiveAccountsEmployeesAndProjectTaggedReceivables() = runBlocking {
+        db.accountDao().insertAccounts(listOf(
+            AccountEntity("BK-ACTIVE", "Kas Backup", "Kas", 100000.0, isActive = true),
+            AccountEntity("BK-INACTIVE", "Bank Lama", "Bank", 250000.0, isActive = false)
+        ))
+        val project = ProjectEntity(
+            id = "PRJ-BACKUP-001",
+            name = "Perdagangan Backup",
+            category = "Perdagangan",
+            businessModel = "Tidak berlaku",
+            location = "",
+            startDate = "2026-10-01",
+            targetEndDate = "2026-12-31",
+            budgetAmount = 1000000.0,
+            status = "Berjalan",
+            notes = "",
+            isActive = true,
+            createdAt = 1790812800000L
+        )
+        repository.saveProject(project)
+        val inactiveEmployee = EmployeeEntity(
+            id = "EMP-BACKUP-INACTIVE",
+            name = "Karyawan Nonaktif",
+            position = "Staf",
+            department = "Perdagangan",
+            phone = "",
+            dailyRate = 0.0,
+            monthlySalary = 0.0,
+            isActive = false
+        )
+        db.employeeDao().insertEmployee(inactiveEmployee)
+        db.attendanceDao().insertAttendance(
+            AttendanceEntity(
+                id = "ATT-BACKUP-INACTIVE",
+                employeeId = inactiveEmployee.id,
+                employeeName = inactiveEmployee.name,
+                department = inactiveEmployee.department,
+                date = "2026-10-05",
+                timeIn = "08:00",
+                timeOut = "17:00",
+                status = "Hadir",
+                project = project.name
+            )
+        )
+        val receivable = com.example.data.model.ReceivableEntity(
+            id = "PIU-BACKUP-001",
+            date = "2026-10-05",
+            customerName = "Pelanggan Backup",
+            description = "Piutang proyek perdagangan",
+            totalAmount = 500000.0,
+            dueDate = "2026-11-05",
+            targetAccount = "Kas Backup",
+            project = project.name,
+            fundBucket = "Perdagangan"
+        )
+        repository.saveReceivable(receivable)
+
+        val json = repository.exportDataToJson(
+            transactions = emptyList(),
+            accounts = db.accountDao().getAllAccounts().first(),
+            budgets = db.budgetDao().getAllBudgets().first(),
+            receivables = db.receivableDao().getAllReceivables().first(),
+            notes = db.noteDao().getAllNotes().first()
+        )
+
+        val restoredDb = Room.inMemoryDatabaseBuilder(
+            ApplicationProvider.getApplicationContext<Context>(),
+            AppDatabase::class.java
+        ).allowMainThreadQueries().build()
+        try {
+            val restoredRepo = KasRepository(
+                database = restoredDb,
+                transactionDao = restoredDb.transactionDao(),
+                accountDao = restoredDb.accountDao(),
+                budgetDao = restoredDb.budgetDao(),
+                receivableDao = restoredDb.receivableDao(),
+                noteDao = restoredDb.noteDao(),
+                employeeDao = restoredDb.employeeDao(),
+                attendanceDao = restoredDb.attendanceDao(),
+                auditDao = restoredDb.auditDao(),
+                bankReconDao = restoredDb.bankReconDao(),
+                projectDao = restoredDb.projectDao(),
+                projectPlanDao = restoredDb.projectPlanDao(),
+                housingUnitDao = restoredDb.housingUnitDao()
+            )
+            val restored = restoredRepo.restoreDataFromJson(json)
+            assertTrue("Backup JSON harus dapat direstore: ${restored.exceptionOrNull()?.message}", restored.isSuccess)
+            assertFalse(restoredDb.accountDao().getAccountById("BK-INACTIVE")?.isActive ?: true)
+            assertNotNull(restoredDb.employeeDao().getEmployeeById(inactiveEmployee.id))
+            assertEquals(1, restoredDb.attendanceDao().getAllAttendances().first().size)
+            val restoredReceivable = restoredDb.receivableDao().getReceivableById(receivable.id)
+            assertEquals(project.name, restoredReceivable?.project)
+            assertEquals("Perdagangan", restoredReceivable?.fundBucket)
+        } finally {
+            restoredDb.close()
+        }
+    }
+
+    @Test
+    fun legacySeedCleanupRemovesOnlyKnownBootstrapDataAndPreservesReferencedCash() = runBlocking {
+        db.accountDao().insertAccounts(listOf(
+            AccountEntity("acc_tunai", "Kas Tunai", "Kas", 2500000.0, "#16A34A"),
+            AccountEntity("acc_bca", "Bank BCA", "Bank", 12500000.0, "#2563EB")
+        ))
+        db.transactionDao().insertTransaction(
+            TransactionEntity(
+                id = "TX-REAL-KEEP",
+                type = "MASUK",
+                date = "2026-10-10",
+                time = "10:00:00",
+                account = "Kas Tunai",
+                name = "Uang nyata",
+                category = "Penjualan",
+                description = "",
+                amount = 100000.0,
+                status = "Selesai"
+            )
+        )
+        db.employeeDao().insertEmployee(
+            EmployeeEntity("EMP-001", "Ahmad Fauzi", "Staff Kasir & Keuangan", "Keuangan", "6281234567890", 150000.0, 3800000.0)
+        )
+        db.attendanceDao().insertAttendance(
+            AttendanceEntity(
+                id = "ATT-2026-10-09-001",
+                employeeId = "EMP-001",
+                employeeName = "Ahmad Fauzi",
+                department = "Keuangan",
+                date = "2026-10-09",
+                timeIn = "07:55",
+                timeOut = "17:05",
+                status = "Hadir",
+                overtimeHours = 1.0,
+                dailyAllowance = 150000.0,
+                notes = "Tepat waktu"
+            )
+        )
+        db.budgetDao().insertBudget(
+            BudgetEntity(period = "2026-10", category = "Operasional", budgetAmount = 6000000.0, notes = "Kebutuhan operasional kantor harian")
+        )
+        db.auditDao().insertAuditLog(
+            AuditLogEntity(
+                dateFormatted = "2026-10-09 10:00:00",
+                action = "INITIALIZE_SYSTEM",
+                recordId = "SYS-SETUP",
+                details = "Seed",
+                user = "Sistem Audit",
+                verifiedFormulaStatus = "RECORDED",
+                balanceAfter = 45500000.0
+            )
+        )
+
+        AppDatabase.cleanupLegacySeedRows(db.openHelper.writableDatabase)
+
+        assertEquals(0.0, db.accountDao().getAccountById("acc_tunai")?.initialBalance ?: -1.0, 0.01)
+        assertEquals(null, db.accountDao().getAccountById("acc_bca"))
+        assertEquals(0, db.attendanceDao().getAllAttendances().first().size)
+        assertEquals(null, db.employeeDao().getEmployeeById("EMP-001"))
+        assertTrue(db.budgetDao().getAllBudgets().first().isEmpty())
+        assertFalse(db.auditDao().getRecentAuditLogs().first().any { it.recordId == "SYS-SETUP" })
+        assertNotNull(db.transactionDao().getTransactionById("TX-REAL-KEEP"))
+    }
+
+    @Test
+    fun receivablePaymentsStayOnTheirProjectAndPaidReceivablesCannotBeDeleted() = runBlocking {
+        db.accountDao().insertAccount(AccountEntity("acc-project-rec", "Kas Proyek", "Kas", 0.0))
+        val project = ProjectEntity(
+            id = "PRJ-PIU-001",
+            name = "Perdagangan Piutang",
+            category = "Perdagangan",
+            businessModel = "Tidak berlaku",
+            location = "",
+            startDate = "2026-10-01",
+            targetEndDate = "2026-12-31",
+            budgetAmount = 1000000.0,
+            status = "Berjalan",
+            notes = "",
+            isActive = true,
+            createdAt = 1790812800000L
+        )
+        repository.saveProject(project)
+        val receivable = com.example.data.model.ReceivableEntity(
+            id = "PIU-PROJECT-001",
+            date = "2026-10-01",
+            customerName = "Pelanggan",
+            description = "Pembayaran perdagangan",
+            totalAmount = 300000.0,
+            dueDate = "2026-11-01",
+            targetAccount = "Kas Proyek",
+            project = project.name,
+            fundBucket = "Perdagangan"
+        )
+        repository.saveReceivable(receivable)
+        repository.payReceivable(receivable.id, 100000.0, "Kas Proyek")
+        val payment = db.transactionDao().getAllActiveTransactions().first().single()
+        assertEquals(project.name, payment.project)
+        assertEquals("Perdagangan", payment.fundBucket)
+
+        try {
+            repository.deleteReceivable(receivable.id)
+            throw AssertionError("Tagihan dengan pembayaran tercatat tidak boleh dihapus.")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message?.contains("sudah memiliki pembayaran") == true)
+        }
+        assertNotNull(db.receivableDao().getReceivableById(receivable.id))
+    }
+
+    @Test
+    fun attendanceCannotBeDeletedAfterItsMonthlyPayrollWasDisbursed() = runBlocking {
+        db.accountDao().insertAccount(AccountEntity("acc-payroll-lock", "Kas Gaji", "Kas", 1000000.0))
+        val employee = EmployeeEntity(
+            id = "EMP-PAYROLL-LOCK",
+            name = "Karyawan Payroll",
+            position = "Staf",
+            department = "Umum",
+            phone = "",
+            dailyRate = 100000.0,
+            monthlySalary = 3000000.0
+        )
+        repository.saveEmployee(employee)
+        val attendance = AttendanceEntity(
+            id = "ATT-PAYROLL-LOCK",
+            employeeId = employee.id,
+            employeeName = employee.name,
+            department = employee.department,
+            date = "2026-10-05",
+            status = "Hadir",
+            dailyAllowance = 100000.0
+        )
+        repository.saveAttendance(attendance)
+        repository.savePayrollDisbursement(
+            period = "2026-10",
+            totalAmount = 3100000.0,
+            accountName = "Kas Gaji",
+            allocationsByProject = mapOf("" to 3100000.0)
+        )
+        try {
+            repository.deleteAttendance(attendance.id)
+            throw AssertionError("Absensi periode payroll tertutup tidak boleh dihapus.")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message?.contains("payroll periode 2026-10 sudah dicairkan") == true)
+        }
+        assertNotNull(db.attendanceDao().getAttendanceById(attendance.id))
+    }
 
     @Test
     fun payrollAllocationSeparatesMonthlyBaseAndAttendanceProjectCosts() {

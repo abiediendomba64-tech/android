@@ -84,7 +84,8 @@ fun PiutangScreen(
     val context = LocalContext.current
     val allRecords by viewModel.receivables.collectAsStateWithLifecycle()
     val accounts by viewModel.accounts.collectAsStateWithLifecycle()
-    val accountNames = accounts.map { it.name }
+    val projects by viewModel.activeProjects.collectAsStateWithLifecycle()
+    val accountNames = accounts.filter { it.isActive }.map { it.name }
 
     var activeTab by remember { mutableStateOf("Piutang") } // "Piutang" or "Hutang"
 
@@ -106,6 +107,8 @@ fun PiutangScreen(
     var amountInput by remember { mutableStateOf("") }
     var dueDateInput by remember { mutableStateOf("") }
     var selectedAccount by remember { mutableStateOf(accountNames.firstOrNull().orEmpty()) }
+    var selectedProject by remember { mutableStateOf("") }
+    var selectedFundBucket by remember { mutableStateOf("PT") }
     var notesInput by remember { mutableStateOf("") }
 
     // Pay form states
@@ -328,6 +331,7 @@ fun PiutangScreen(
                             }
 
                             DetailRow("Tanggal Transaksi", formatDateIndo(item.date))
+                    DetailRow("Proyek / Dana", (item.project.ifBlank { "PT / Umum" }) + " • " + item.fundBucket)
                             DetailRow("Jatuh Tempo", formatDateIndo(item.dueDate))
                             DetailRow("Akun Terhubung", item.targetAccount)
                             DetailRow("Total Nominal", formatRupiah(item.totalAmount))
@@ -457,6 +461,20 @@ fun PiutangScreen(
                         onValueChange = { selectedAccount = it }
                     )
 
+                    FormDropdown(
+                        label = "Proyek / Alokasi",
+                        selectedValue = selectedProject.ifBlank { "PT / Umum" },
+                        options = listOf("PT / Umum") + projects.map { it.name },
+                        onValueChange = { selectedProject = if (it == "PT / Umum") "" else it }
+                    )
+
+                    FormDropdown(
+                        label = "Kelompok Dana",
+                        selectedValue = selectedFundBucket,
+                        options = viewModel.masterFundBuckets,
+                        onValueChange = { selectedFundBucket = it }
+                    )
+
                     OutlinedTextField(
                         value = notesInput,
                         onValueChange = { notesInput = it },
@@ -478,7 +496,9 @@ fun PiutangScreen(
                                     totalAmount = amt,
                                     dueDate = dueDateInput,
                                     targetAccount = selectedAccount,
-                                    notes = notesInput
+                                    notes = notesInput,
+                                    project = selectedProject,
+                                    fundBucket = selectedFundBucket
                                 )
                             } else {
                                 viewModel.tambahHutang(
@@ -487,7 +507,9 @@ fun PiutangScreen(
                                     totalAmount = amt,
                                     dueDate = dueDateInput,
                                     sourceAccount = selectedAccount,
-                                    notes = notesInput
+                                    notes = notesInput,
+                                    project = selectedProject,
+                                    fundBucket = selectedFundBucket
                                 )
                             }
                             showAddDialog = false
@@ -495,6 +517,8 @@ fun PiutangScreen(
                             description = ""
                             amountInput = ""
                             notesInput = ""
+                            selectedProject = ""
+                            selectedFundBucket = "PT"
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue)
