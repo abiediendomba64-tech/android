@@ -65,7 +65,7 @@ fun LaporanScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val transactions by viewModel.activeTransactions.collectAsStateWithLifecycle()
+    val transactions by viewModel.ledgerTransactions.collectAsStateWithLifecycle()
     val accounts by viewModel.accounts.collectAsStateWithLifecycle()
     val kpis by viewModel.dashboardKpis.collectAsStateWithLifecycle()
 
