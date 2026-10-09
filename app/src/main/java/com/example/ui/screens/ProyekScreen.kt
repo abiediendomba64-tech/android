@@ -54,6 +54,7 @@ fun ProyekScreen(
     val projects by viewModel.activeProjects.collectAsStateWithLifecycle()
     val transactions by viewModel.ledgerTransactions.collectAsStateWithLifecycle()
     val budgets by viewModel.budgets.collectAsStateWithLifecycle()
+    val projectPlans by viewModel.projectPlans.collectAsStateWithLifecycle()
     val housingUnits by viewModel.housingUnits.collectAsStateWithLifecycle()
     var showAddDialog by remember { mutableStateOf(false) }
     var projectName by remember { mutableStateOf("") }
@@ -81,6 +82,8 @@ fun ProyekScreen(
     val projectTransactions = settled.filter { it.project.isNotBlank() }
     val totalProjectIn = projectTransactions.filter { it.type == "MASUK" }.sumOf { it.amount }
     val totalProjectOut = projectTransactions.filter { it.type == "KELUAR" }.sumOf { it.amount }
+    val activePlans = projectPlans.filter { it.status == "Direncanakan" }
+    val totalPlannedEstimate = activePlans.sumOf { it.estimatedAmount }
     val fundSummary = viewModel.masterFundBuckets.map { bucket ->
         val rows = settled.filter { it.fundBucket.equals(bucket, ignoreCase = true) && it.type != "TRANSFER" }
         Triple(bucket, rows.filter { it.type == "MASUK" }.sumOf { it.amount }, rows.filter { it.type == "KELUAR" }.sumOf { it.amount })
@@ -107,6 +110,7 @@ fun ProyekScreen(
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("DASHBOARD PROYEK & USAHA", fontWeight = FontWeight.ExtraBold, fontSize = 16.sp)
                         Text("Proyek aktif: ${projects.size}  •  Pagu master: ${formatRupiah(projects.sumOf { it.budgetAmount })}")
+                        Text("Estimasi agenda yang masih direncanakan: ${formatRupiah(totalPlannedEstimate)} (${activePlans.size} agenda) — bukan kas aktual.", fontSize = 11.sp)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Column(Modifier.weight(1f)) {
                                 Text("Pemasukan aktual proyek", fontSize = 11.sp)
@@ -161,6 +165,8 @@ fun ProyekScreen(
                     val outflow = rows.filter { it.type == "KELUAR" }.sumOf { it.amount }
                     val remaining = project.budgetAmount - outflow
                     val budgetRows = budgets.filter { it.project.equals(project.name, ignoreCase = true) }
+                    val projectPlansForCard = activePlans.filter { it.project.equals(project.name, ignoreCase = true) }
+                    val projectPlanEstimate = projectPlansForCard.sumOf { it.estimatedAmount }
                     val projectUnits = housingUnits.filter { it.project.equals(project.name, ignoreCase = true) }
                     Card(
                         modifier = Modifier.fillMaxWidth(),
@@ -198,6 +204,10 @@ fun ProyekScreen(
                                 Text("Net aktual: ${formatRupiah(inflow - outflow)}", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                             }
                             Text("Pos anggaran terikat proyek: ${budgetRows.size}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("Rencana aktif: ${projectPlansForCard.size} agenda • estimasi ${formatRupiah(projectPlanEstimate)}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            projectPlansForCard.sortedBy { it.planDate }.take(3).forEach { plan ->
+                                Text("• ${plan.planDate} — ${plan.title}: ${formatRupiah(plan.estimatedAmount)}", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
 
                             if (project.category == "Perumahan") {
                                 HorizontalDivider()

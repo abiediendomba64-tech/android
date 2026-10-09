@@ -508,13 +508,6 @@ fun AnggaranScreen(
                         onValueChange = { selectedFundBucket = it }
                     )
 
-                    FormDropdown(
-                        label = "Pos Alokasi Anggaran",
-                        selectedValue = selectedCategory,
-                        options = viewModel.masterAlokasi,
-                        onValueChange = { selectedCategory = it }
-                    )
-
                     OutlinedTextField(
                         value = amountInput,
                         onValueChange = { if (it.all { ch -> ch.isDigit() }) amountInput = it },

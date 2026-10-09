@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -120,6 +121,7 @@ fun AbsensiScreen(
 
     // Attendance Form States
     var selectedEmpId by remember { mutableStateOf(employees.firstOrNull()?.id ?: "") }
+    var attDateInput by remember { mutableStateOf(SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())) }
     var attStatus by remember { mutableStateOf("Hadir") }
     var attTimeIn by remember { mutableStateOf("08:00") }
     var attTimeOut by remember { mutableStateOf("17:00") }
@@ -146,6 +148,14 @@ fun AbsensiScreen(
                     onClick = {
                         if (employees.isNotEmpty()) {
                             selectedEmpId = employees.first().id
+                            val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+                            attDateInput = when (filterMode) {
+                                "Bulanan" -> if (today.startsWith(selectedMonth)) today else "${selectedMonth}-01"
+                                "Tahunan" -> if (today.startsWith(selectedYear)) today else "${selectedYear}-01-01"
+                                "Periodik" -> today.takeIf { it >= startDate && it <= endDate } ?: endDate
+                                else -> selectedDate
+                            }
+                            attProject = employees.first().defaultProject
                             showRecordAttendanceDialog = true
                         }
                     },
@@ -379,6 +389,7 @@ fun AbsensiScreen(
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(
                                 onClick = { showDisburseSalaryDialog = true },
+                                enabled = !(filterMode == "Harian" && employees.any { it.monthlySalary > 0.0 }),
                                 modifier = Modifier.weight(1f),
                                 colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
                                 shape = RoundedCornerShape(8.dp)
@@ -398,6 +409,13 @@ fun AbsensiScreen(
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text("Slip Gaji", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
+                        }
+                        if (filterMode == "Harian" && employees.any { it.monthlySalary > 0.0 }) {
+                            Text(
+                                "Pilih Bulanan atau Periodik untuk mencairkan payroll. Filter Harian akan ikut menghitung gaji pokok bulanan sehingga berisiko membayar gaji penuh berulang.",
+                                color = MaterialTheme.colorScheme.error,
+                                fontSize = 11.sp
+                            )
                         }
                     }
                 }
@@ -637,7 +655,16 @@ fun AbsensiScreen(
             onDismissRequest = { showRecordAttendanceDialog = false },
             title = { Text("Catat Kehadiran Karyawan", fontWeight = FontWeight.Bold) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(
+                    modifier = Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    IsoDatePickerField(
+                        value = attDateInput,
+                        label = "Tanggal Absensi *",
+                        onDateSelected = { attDateInput = it },
+                        modifier = Modifier.fillMaxWidth().testTag("attendance_date_input")
+                    )
                     FormDropdown(
                         label = "Pilih Karyawan",
                         selectedValue = selectedEmpDropdown,
@@ -702,11 +729,20 @@ fun AbsensiScreen(
                         val emp = employees.firstOrNull { it.id == selectedEmpId } ?: return@Button
                         val ovt = attOvertime.toDoubleOrNull() ?: 0.0
                         val allowance = if (attStatus == "Hadir") emp.dailyRate else 0.0
+                        when (filterMode) {
+                            "Harian" -> viewModel.attendanceSelectedDate.value = attDateInput
+                            "Bulanan" -> viewModel.attendanceSelectedMonth.value = attDateInput.take(7)
+                            "Tahunan" -> viewModel.attendanceSelectedYear.value = attDateInput.take(4)
+                            "Periodik" -> {
+                                if (attDateInput < startDate) viewModel.attendanceStartDate.value = attDateInput
+                                if (attDateInput > endDate) viewModel.attendanceEndDate.value = attDateInput
+                            }
+                        }
                         viewModel.catatAbsensi(
                             employeeId = emp.id,
                             employeeName = emp.name,
                             department = emp.department,
-                            date = selectedDate,
+                            date = attDateInput,
                             timeIn = attTimeIn,
                             timeOut = attTimeOut,
                             status = attStatus,
@@ -717,6 +753,9 @@ fun AbsensiScreen(
                         )
                         showRecordAttendanceDialog = false
                         attNotes = ""
+                        attTimeIn = "08:00"
+                        attTimeOut = "17:00"
+                        attOvertime = "0"
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue)
                 ) {
