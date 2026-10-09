@@ -197,7 +197,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
 
     // Master dropdown lists used by the app.
     val masterKategoriMasuk = listOf(
-        "Penjualan", "Piutang Masuk", "Modal", "Pendapatan Lain", "Transfer Masuk", "Lainnya"
+        "Penjualan", "Piutang Masuk", "Modal", "Pendapatan Lain", "Lainnya"
     )
 
     val masterKategoriKeluar = listOf(
@@ -861,7 +861,8 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun exportCsv(): String {
-        return repository.exportTransactionsToCsv(activeTransactions.value)
+        // Archived records still affect real balances and remain part of the ledger.
+        return repository.exportTransactionsToCsv(ledgerTransactions.value)
     }
 
     suspend fun importCsv(csvContent: String): Result<Int> {

@@ -972,6 +972,82 @@ class ExampleRobolectricTest {
     }
 
     @Test
+    fun budgetRealizationUsesAllocationOnlyAndDoesNotDoubleCountExpenseCategory() {
+        val budgets = listOf(
+            BudgetEntity(period = "2026-10", category = "Gaji", budgetAmount = 1000000.0),
+            BudgetEntity(period = "2026-10", category = "Operasional", budgetAmount = 1000000.0)
+        )
+        val transaction = TransactionEntity(
+            id = "TX-BUDGET-ALLOCATION",
+            type = "KELUAR",
+            date = "2026-10-10",
+            time = "10:00:00",
+            account = "Kas",
+            name = "Bahan proyek",
+            category = "Gaji",
+            description = "",
+            amount = 250000.0,
+            allocation = "Operasional",
+            status = "Selesai"
+        )
+
+        val results = repository.calculateBudgetRealizations(budgets, listOf(transaction))
+        assertEquals(0.0, results.first { it.budget.category == "Gaji" }.realization, 0.01)
+        assertEquals(250000.0, results.first { it.budget.category == "Operasional" }.realization, 0.01)
+    }
+
+    @Test
+    fun projectTaggedPayrollRemainsOperatingCashOutflowUnlessAllocationIsProject() {
+        val account = AccountEntity("cash-project-payroll", "Kas Payroll", "Kas", 1000000.0)
+        val payroll = TransactionEntity(
+            id = "TX-PROJECT-PAYROLL-FLOW",
+            type = "KELUAR",
+            date = "2026-10-10",
+            time = "10:00:00",
+            account = account.name,
+            name = "Gaji pekerja proyek",
+            category = "Gaji",
+            description = "",
+            amount = 200000.0,
+            allocation = "Gaji",
+            project = "Perumahan A",
+            status = "Selesai"
+        )
+        val flow = repository.calculateCashFlowStatement(
+            transactions = listOf(payroll),
+            accounts = listOf(account),
+            startDate = "2026-10-01",
+            endDate = "2026-10-31"
+        )
+        assertEquals(200000.0, flow.operatingOutflow, 0.01)
+        assertEquals(0.0, flow.investingOutflow, 0.01)
+        assertEquals(800000.0, flow.closingBalance, 0.01)
+    }
+
+    @Test
+    fun transactionCannotRecordInternalTransferAsRevenue() = runBlocking {
+        db.accountDao().insertAccount(AccountEntity("acc-transfer-validation", "Kas Transfer", "Kas", 0.0))
+        val invalid = TransactionEntity(
+            id = "TX-TRANSFER-AS-INCOME",
+            type = "MASUK",
+            date = "2026-10-10",
+            time = "10:00:00",
+            account = "Kas Transfer",
+            name = "Transfer dari bank",
+            category = "Transfer Masuk",
+            description = "",
+            amount = 100000.0,
+            status = "Selesai"
+        )
+        try {
+            repository.saveTransaction(invalid)
+            throw AssertionError("Transfer internal tidak boleh tercatat sebagai pendapatan.")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message?.contains("menu Transfer") == true)
+        }
+    }
+
+    @Test
     fun legacySeedCleanupRemovesOnlyKnownBootstrapDataAndPreservesReferencedCash() = runBlocking {
         db.accountDao().insertAccounts(listOf(
             AccountEntity("acc_tunai", "Kas Tunai", "Kas", 2500000.0, "#16A34A"),

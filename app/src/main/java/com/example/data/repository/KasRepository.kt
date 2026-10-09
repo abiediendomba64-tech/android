@@ -197,6 +197,9 @@ class KasRepository(
         require(transaction.inputTime > 0L) { "Waktu input transaksi tidak valid." }
         require(transaction.amount.isFinite() && transaction.amount > 0.0) { "Nominal transaksi harus lebih besar dari Rp 0." }
         require(transaction.type in setOf("MASUK", "KELUAR", "TRANSFER")) { "Tipe transaksi tidak valid." }
+        require(!(transaction.type == "MASUK" && transaction.category.equals("Transfer Masuk", ignoreCase = true))) {
+            "Transfer antar akun harus dicatat melalui menu Transfer agar tidak dihitung sebagai pendapatan."
+        }
         require(transaction.status in setOf("Selesai", "Draft", "Pending", "Batal", "Dihapus")) { "Status transaksi tidak valid." }
         require(accountDao.getAccountByName(transaction.account)?.isActive == true) {
             "Akun " + transaction.account + " tidak terdaftar atau nonaktif."
@@ -950,7 +953,7 @@ class KasRepository(
                 (it.date.startsWith(budget.period) || budget.period.equals("All", ignoreCase = true)) &&
                         it.fundBucket.equals(budget.fundBucket, ignoreCase = true) &&
                         (budget.project.isBlank() || it.project.equals(budget.project, ignoreCase = true)) &&
-                        (it.category.equals(budget.category, ignoreCase = true) || it.allocation.equals(budget.category, ignoreCase = true))
+                        it.allocation.equals(budget.category, ignoreCase = true)
             }.sumOf { it.amount }
 
             val remaining = budget.budgetAmount - realization
@@ -979,8 +982,10 @@ class KasRepository(
             it.type == "MASUK" && it.category !in listOf("Modal", "Investasi")
         }.sumOf { it.amount }
 
+        // Project attribution is separate from cash-flow classification: project wages
+        // remain operating expenses unless their allocation explicitly says "Proyek".
         val investingIds = periodTx.filter {
-            it.type == "KELUAR" && (it.allocation == "Proyek" || it.project.isNotBlank())
+            it.type == "KELUAR" && it.allocation.equals("Proyek", ignoreCase = true)
         }.map { it.id }.toSet()
 
         val invOutflow = periodTx.filter { it.id in investingIds }.sumOf { it.amount }
@@ -1176,6 +1181,9 @@ class KasRepository(
             if (!tx.amount.isFinite() || tx.amount <= 0.0) issues += "Transaksi ${tx.id}: nominal tidak valid."
             if (tx.type !in validTypes) issues += "Transaksi ${tx.id}: tipe ${tx.type} tidak valid."
             if (tx.status !in validStatuses) issues += "Transaksi ${tx.id}: status ${tx.status} tidak valid."
+            if (tx.type == "MASUK" && tx.category.equals("Transfer Masuk", ignoreCase = true)) {
+                issues += "Transaksi ${tx.id}: kategori Transfer Masuk tercatat sebagai pemasukan; verifikasi dan pindahkan ke buku transfer agar pendapatan tidak ganda."
+            }
             if (tx.account.trim().lowercase(Locale.getDefault()) !in accountNames) issues += "Transaksi ${tx.id}: akun ${tx.account} tidak terdaftar."
             if (tx.type == "TRANSFER") {
                 val destination = tx.toAccount?.trim().orEmpty()
