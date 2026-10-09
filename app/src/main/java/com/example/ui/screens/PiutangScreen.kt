@@ -44,6 +44,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -83,9 +84,9 @@ fun PiutangScreen(
 ) {
     val context = LocalContext.current
     val allRecords by viewModel.receivables.collectAsStateWithLifecycle()
-    val accounts by viewModel.accounts.collectAsStateWithLifecycle()
+    val accounts by viewModel.activeAccounts.collectAsStateWithLifecycle()
     val projects by viewModel.activeProjects.collectAsStateWithLifecycle()
-    val accountNames = accounts.filter { it.isActive }.map { it.name }
+    val accountNames = accounts.map { it.name }
 
     var activeTab by remember { mutableStateOf("Piutang") } // "Piutang" or "Hutang"
 
@@ -114,6 +115,11 @@ fun PiutangScreen(
     // Pay form states
     var payAmountInput by remember { mutableStateOf("") }
     var payAccount by remember { mutableStateOf(accountNames.firstOrNull().orEmpty()) }
+
+    LaunchedEffect(accountNames) {
+        if (selectedAccount !in accountNames) selectedAccount = accountNames.firstOrNull().orEmpty()
+        if (payAccount !in accountNames) payAccount = accountNames.firstOrNull().orEmpty()
+    }
 
     Scaffold(
         floatingActionButton = {
