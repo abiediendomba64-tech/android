@@ -1451,6 +1451,10 @@ class KasRepository(
         val employeesSnapshot = employeeDao.getAllEmployees().first()
         val attendancesSnapshot = attendanceDao.getAllAttendances().first()
         val projectsSnapshot = projectDao.getAllProjects().first()
+        val projectPlansSnapshot = projectPlanDao.getAllPlans().first()
+        val housingUnitsSnapshot = housingUnitDao.getAllUnits().first()
+        val notesSnapshot = noteDao.getAllNotes().first()
+        val reconciliationsSnapshot = bankReconDao.getAllReconciliations().first()
 
         val result = runIntegrityAudit(
             accounts = accountsSnapshot,
@@ -1459,7 +1463,11 @@ class KasRepository(
             receivables = receivablesSnapshot,
             employees = employeesSnapshot,
             attendances = attendancesSnapshot,
-            projects = projectsSnapshot
+            projects = projectsSnapshot,
+            projectPlans = projectPlansSnapshot,
+            housingUnits = housingUnitsSnapshot,
+            notes = notesSnapshot,
+            bankReconciliations = reconciliationsSnapshot
         )
         val totalBalance = calculateAccountBalances(accountsSnapshot, transactionsSnapshot).sumOf { it.currentBalance }
         return IntegrityAuditSnapshot(result, totalBalance, transactionsSnapshot.size)
@@ -1472,56 +1480,159 @@ class KasRepository(
         receivables: List<ReceivableEntity>,
         employees: List<EmployeeEntity>,
         attendances: List<AttendanceEntity>,
-        projects: List<ProjectEntity>? = null
+        projects: List<ProjectEntity>? = null,
+        projectPlans: List<ProjectPlanEntity> = emptyList(),
+        housingUnits: List<HousingUnitEntity> = emptyList(),
+        notes: List<CashNoteEntity> = emptyList(),
+        bankReconciliations: List<BankReconEntity> = emptyList()
     ): IntegrityAuditResult {
         val issues = mutableListOf<String>()
         val checkedAt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-        val duplicateAccountNames = accounts
-            .filter { it.name.isNotBlank() }
-            .groupBy { it.name.trim().lowercase(Locale.ROOT) }
-            .filterValues { it.size > 1 }
-        duplicateAccountNames.values.forEach { duplicates ->
-            issues += "Nama akun duplikat: ${duplicates.joinToString(" / ") { it.name }}. Saldo/transaksi berbasis nama tidak dapat dipastikan sampai master akun dirapikan."
+        fun key(value: String): String = value.trim().lowercase(Locale.ROOT)
+        val validFundBuckets = setOf("PT", "Perdagangan", "Dana Talang", "Pribadi", "Darurat")
+        val validTypes = setOf("MASUK", "KELUAR", "TRANSFER")
+        val validStatuses = setOf("Selesai", "Draft", "Pending", "Batal", "Dihapus")
+        val projectRows = projects.orEmpty()
+        val projectKeys = projectRows.map { key(it.name) }
+        val accountNames = accounts.map { key(it.name) }.toSet()
+        val employeeIds = employees.map { it.id }.toSet()
+
+        accounts.groupBy { key(it.name) }.filter { it.key.isNotBlank() && it.value.size > 1 }.values.forEach { duplicates ->
+            issues += "Nama akun duplikat: ${duplicates.joinToString(" / ") { it.name }}. Saldo berbasis nama belum dapat dipastikan."
         }
         accounts.forEach { account ->
+            if (account.id.isBlank()) issues += "Akun tanpa ID ditemukan."
             if (account.name.isBlank()) issues += "Akun ${account.id}: nama kosong."
             if (!account.initialBalance.isFinite() || account.initialBalance < 0.0) issues += "Akun ${account.id}: saldo awal tidak valid."
             if (account.type !in setOf("Kas", "Bank", "E-Wallet", "Lainnya")) issues += "Akun ${account.id}: jenis tidak valid."
         }
-        val accountNames = accounts.map { it.name.trim().lowercase(Locale.ROOT) }.toSet()
-        val employeeIds = employees.map { it.id }.toSet()
-        val validTypes = setOf("MASUK", "KELUAR", "TRANSFER")
-        val validStatuses = setOf("Selesai", "Draft", "Pending", "Batal", "Dihapus")
 
+        if (projects != null && projectKeys.distinct().size != projectKeys.size) {
+            issues += "Nama proyek duplikat; hubungan transaksi, unit, anggaran, dan kalender ambigu."
+        }
+        projectRows.forEach { project ->
+            if (project.id.isBlank() || project.name.isBlank()) issues += "Master proyek memiliki ID/nama kosong."
+            if (project.category !in setOf("Pembebasan Tanah", "Cut & Fill", "Perumahan", "Perdagangan", "Operasional PT", "Lainnya")) {
+                issues += "Proyek ${project.id}: kategori tidak valid."
+            }
+            if (project.businessModel !in setOf("Subsidi", "Komersial", "Tidak berlaku") ||
+                (project.category != "Perumahan" && project.businessModel != "Tidak berlaku")) {
+                issues += "Proyek ${project.id}: model bisnis tidak sesuai kategori."
+            }
+            if (!runCatching { requireIsoDate(project.startDate, "Tanggal mulai proyek") }.isSuccess ||
+                !runCatching { requireIsoDate(project.targetEndDate, "Target proyek") }.isSuccess ||
+                project.targetEndDate < project.startDate) {
+                issues += "Proyek ${project.id}: tanggal/jadwal tidak valid."
+            }
+            if (!project.budgetAmount.isFinite() || project.budgetAmount < 0.0) issues += "Proyek ${project.id}: pagu tidak valid."
+            if (project.status !in setOf("Berjalan", "Ditunda", "Selesai")) issues += "Proyek ${project.id}: status tidak valid."
+        }
+
+        val duplicateTransactionIds = transactions.groupBy { it.id }.filterValues { it.size > 1 }.keys
+        duplicateTransactionIds.forEach { issues += "ID transaksi duplikat dalam snapshot: $it." }
+        val payrollPeriods = mutableListOf<Pair<String, Pair<String, String>>>()
         transactions.forEach { tx ->
+            if (tx.id.isBlank()) issues += "Transaksi tanpa ID ditemukan."
             if (!tx.amount.isFinite() || tx.amount <= 0.0) issues += "Transaksi ${tx.id}: nominal tidak valid."
             if (tx.type !in validTypes) issues += "Transaksi ${tx.id}: tipe ${tx.type} tidak valid."
             if (tx.status !in validStatuses) issues += "Transaksi ${tx.id}: status ${tx.status} tidak valid."
-            if (tx.type == "MASUK" && tx.category.equals("Transfer Masuk", ignoreCase = true)) {
-                issues += "Transaksi ${tx.id}: kategori Transfer Masuk tercatat sebagai pemasukan; verifikasi dan pindahkan ke buku transfer agar pendapatan tidak ganda."
+            if (tx.name.isBlank() || tx.category.isBlank() || tx.allocation.isBlank() || tx.pic.isBlank() || tx.inputBy.isBlank()) {
+                issues += "Transaksi ${tx.id}: nama/kategori/alokasi/PIC/input wajib tidak lengkap."
             }
-            if (tx.account.trim().lowercase(Locale.getDefault()) !in accountNames) issues += "Transaksi ${tx.id}: akun ${tx.account} tidak terdaftar."
-            if (tx.project.isNotBlank() && projects != null &&
-                projects.none { it.name.equals(tx.project.trim(), ignoreCase = true) }
-            ) {
+            if (!runCatching { requireIsoDate(tx.date, "Tanggal transaksi") }.isSuccess) issues += "Transaksi ${tx.id}: tanggal tidak valid."
+            if (!runCatching { requireIsoTime(tx.time, "Jam transaksi") }.isSuccess) issues += "Transaksi ${tx.id}: jam tidak valid."
+            if (tx.inputTime <= 0L) issues += "Transaksi ${tx.id}: waktu input tidak valid."
+            if (tx.fundBucket !in validFundBuckets) issues += "Transaksi ${tx.id}: kelompok dana tidak valid."
+            if (tx.isArchived && (tx.archivedAt == null || tx.archivedAt <= 0L || tx.archivedBy.isNullOrBlank())) {
+                issues += "Transaksi arsip ${tx.id}: metadata arsip tidak lengkap."
+            }
+            if (!tx.isArchived && (tx.archivedAt != null || tx.archivedBy != null)) {
+                issues += "Transaksi aktif ${tx.id}: metadata arsip seharusnya kosong."
+            }
+            if (tx.account.trim().lowercase(Locale.ROOT) !in accountNames) issues += "Transaksi ${tx.id}: akun ${tx.account} tidak terdaftar."
+            if (tx.project.isNotBlank() && projects != null && projectKeys.none { it == key(tx.project) }) {
                 issues += "Transaksi ${tx.id}: proyek ${tx.project} tidak terdaftar."
+            }
+            if (tx.type == "MASUK" && tx.category.equals("Transfer Masuk", ignoreCase = true)) {
+                issues += "Transaksi ${tx.id}: kategori Transfer Masuk tercatat sebagai pemasukan; koreksi ledger legacy."
             }
             if (tx.type == "TRANSFER") {
                 val destination = tx.toAccount?.trim().orEmpty()
                 if (destination.isBlank()) issues += "Transfer ${tx.id}: akun tujuan kosong."
-                else if (destination.lowercase(Locale.getDefault()) !in accountNames) issues += "Transfer ${tx.id}: akun tujuan $destination tidak terdaftar."
+                else if (key(destination) !in accountNames) issues += "Transfer ${tx.id}: akun tujuan ${destination} tidak terdaftar."
                 else if (destination.equals(tx.account, ignoreCase = true)) issues += "Transfer ${tx.id}: akun asal sama dengan tujuan."
+            } else if (tx.toAccount != null) {
+                issues += "Transaksi ${tx.id}: akun tujuan terisi padahal bukan transfer."
+            }
+
+            val receipt = tx.receiptNo.trim()
+            when {
+                receipt.startsWith("PAYROLL-", ignoreCase = true) -> {
+                    if (tx.type != "KELUAR" || !tx.category.equals("Gaji", ignoreCase = true) || tx.status != "Selesai") {
+                        issues += "Transaksi payroll ${tx.id}: tipe/kategori/status harus KELUAR/Gaji/Selesai."
+                    }
+                    val period = payrollPeriodFromReceipt(receipt)
+                    val range = period?.let { runCatching { payrollPeriodRange(it) }.getOrNull() }
+                    if (range == null) issues += "Transaksi payroll ${tx.id}: periode bukti tidak valid."
+                    else if (tx.type == "KELUAR" && tx.category.equals("Gaji", ignoreCase = true) && tx.status == "Selesai") {
+                        payrollPeriods += period!! to range
+                    }
+                }
+                receipt.startsWith("PIU-", ignoreCase = true) -> {
+                    if (tx.type != "MASUK" || !tx.category.equals("Piutang Masuk", ignoreCase = true) || tx.status != "Selesai") {
+                        issues += "Pembayaran PIUTANG pada transaksi ${tx.id} tidak valid."
+                    }
+                }
+                receipt.startsWith("HUT-", ignoreCase = true) -> {
+                    if (tx.type != "KELUAR" || !tx.category.equals("Belanja Barang", ignoreCase = true) || tx.status != "Selesai") {
+                        issues += "Pembayaran HUTANG pada transaksi ${tx.id} tidak valid."
+                    }
+                }
+            }
+        }
+        val distinctPayrollPeriods = payrollPeriods.distinctBy { it.first.lowercase(Locale.ROOT) }
+        for (i in distinctPayrollPeriods.indices) {
+            for (j in i + 1 until distinctPayrollPeriods.size) {
+                val a = distinctPayrollPeriods[i]
+                val b = distinctPayrollPeriods[j]
+                if (a.first != b.first && a.second.first <= b.second.second && b.second.first <= a.second.second) {
+                    issues += "Periode payroll ${a.first} bertumpang tindih dengan ${b.first} pada ledger."
+                }
             }
         }
 
+        val budgetScopeKeys = budgets.map {
+            listOf(it.period, it.category, it.project, it.fundBucket).joinToString("|") { value -> key(value) }
+        }
+        if (budgetScopeKeys.distinct().size != budgetScopeKeys.size) {
+            issues += "Ada cakupan anggaran duplikat (periode/kategori/proyek/kelompok dana)."
+        }
         budgets.forEach { budget ->
             if (!budget.budgetAmount.isFinite() || budget.budgetAmount < 0.0) issues += "Anggaran ${budget.id}: nominal pagu tidak valid."
+            if (!budget.period.equals("All", ignoreCase = true) && !runCatching { periodEndDate(budget.period) }.isSuccess) {
+                issues += "Anggaran ${budget.id}: periode tidak valid."
+            }
+            if (budget.category.isBlank()) issues += "Anggaran ${budget.id}: kategori kosong."
+            if (budget.fundBucket !in validFundBuckets) issues += "Anggaran ${budget.id}: kelompok dana tidak valid."
+            if (budget.project.isNotBlank() && projects != null && projectKeys.none { it == key(budget.project) }) {
+                issues += "Anggaran ${budget.id}: proyek ${budget.project} tidak terdaftar."
+            }
         }
 
+        val duplicateReceivableIds = receivables.groupBy { it.id }.filterValues { it.size > 1 }.keys
+        duplicateReceivableIds.forEach { issues += "ID tagihan duplikat: $it." }
         receivables.forEach { item ->
+            if (item.type !in setOf("PIUTANG", "HUTANG")) issues += "Tagihan ${item.id}: jenis tidak valid."
+            if (!runCatching { requireIsoDate(item.date, "Tanggal tagihan") }.isSuccess) issues += "Tagihan ${item.id}: tanggal pencatatan tidak valid."
+            if (!runCatching { requireIsoDate(item.dueDate, "Jatuh tempo") }.isSuccess) issues += "Tagihan ${item.id}: tanggal jatuh tempo tidak valid."
+            if (item.status !in setOf("Belum Jatuh Tempo", "Jatuh Tempo", "Lunas")) issues += "Tagihan ${item.id}: status tidak valid."
             if (!item.totalAmount.isFinite() || item.totalAmount <= 0.0) issues += "${item.type} ${item.id}: total nominal tidak valid."
             if (!item.paidAmount.isFinite() || item.paidAmount < 0.0 || item.paidAmount > item.totalAmount) issues += "${item.type} ${item.id}: paidAmount tidak valid."
-            if (item.targetAccount.trim().lowercase(Locale.getDefault()) !in accountNames) issues += "${item.type} ${item.id}: akun terkait tidak terdaftar."
+            if (key(item.targetAccount) !in accountNames) issues += "${item.type} ${item.id}: akun terkait tidak terdaftar."
+            if (item.fundBucket !in validFundBuckets) issues += "${item.type} ${item.id}: kelompok dana tidak valid."
+            if (item.project.isNotBlank() && projects != null && projectKeys.none { it == key(item.project) }) {
+                issues += "${item.type} ${item.id}: proyek ${item.project} tidak terdaftar."
+            }
 
             val expectedReceiptPrefix = if (item.type == "PIUTANG") "PIU-" else "HUT-"
             val expectedCategory = if (item.type == "PIUTANG") "Piutang Masuk" else "Belanja Barang"
@@ -1530,16 +1641,100 @@ class KasRepository(
                 it.receiptNo.equals(expectedReceiptPrefix + item.id, ignoreCase = true) &&
                     it.category.equals(expectedCategory, ignoreCase = true) &&
                     it.type == expectedType &&
-                    it.status == "Selesai"
+                    it.status.equals("Selesai", ignoreCase = true)
             }.sumOf { it.amount }
             if (item.paidAmount.isFinite() && kotlin.math.abs(linkedLedgerTotal - item.paidAmount) > 0.01) {
                 issues += "${item.type} ${item.id}: pembayaran pada master (Rp ${item.paidAmount.toLong()}) tidak sama dengan ledger tertaut (Rp ${linkedLedgerTotal.toLong()})."
             }
         }
 
+        val duplicateEmployeeIds = employees.groupBy { it.id }.filterValues { it.size > 1 }.keys
+        duplicateEmployeeIds.forEach { issues += "ID karyawan duplikat: $it." }
+        employees.forEach { employee ->
+            if (employee.id.isBlank() || employee.name.isBlank()) issues += "Data karyawan memiliki ID/nama kosong."
+            if (!employee.dailyRate.isFinite() || employee.dailyRate < 0.0 ||
+                !employee.monthlySalary.isFinite() || employee.monthlySalary < 0.0) {
+                issues += "Karyawan ${employee.id}: nominal gaji tidak valid."
+            }
+            if (employee.defaultProject.isNotBlank() && projects != null && projectKeys.none { it == key(employee.defaultProject) }) {
+                issues += "Karyawan ${employee.id}: proyek alokasi ${employee.defaultProject} tidak terdaftar."
+            }
+        }
+
+        val duplicateAttendanceKeys = attendances.groupBy { key(it.employeeId) + "|" + it.date }.filterValues { it.size > 1 }.keys
+        duplicateAttendanceKeys.forEach { issues += "Absensi ganda untuk karyawan/tanggal: $it." }
         attendances.forEach { att ->
             if (att.employeeId !in employeeIds) issues += "Absensi ${att.id}: karyawan ${att.employeeId} tidak terdaftar."
-            if (att.overtimeHours < 0.0 || att.dailyAllowance < 0.0) issues += "Absensi ${att.id}: nilai lembur/tunjangan tidak valid."
+            if (!runCatching { requireIsoDate(att.date, "Tanggal absensi") }.isSuccess) issues += "Absensi ${att.id}: tanggal tidak valid."
+            if (att.status !in setOf("Hadir", "Izin", "Sakit", "Alpa", "Cuti")) issues += "Absensi ${att.id}: status tidak valid."
+            if (!att.overtimeHours.isFinite() || att.overtimeHours < 0.0 ||
+                !att.dailyAllowance.isFinite() || att.dailyAllowance < 0.0) issues += "Absensi ${att.id}: nilai lembur/tunjangan tidak valid."
+            if (att.project.isNotBlank() && projects != null && projectKeys.none { it == key(att.project) }) {
+                issues += "Absensi ${att.id}: proyek ${att.project} tidak terdaftar."
+            }
+        }
+
+        val unitKeys = housingUnits.map { key(it.project) + "|" + key(it.unitCode) }
+        if (unitKeys.distinct().size != unitKeys.size) issues += "Kode unit duplikat dalam proyek."
+        housingUnits.forEach { unit ->
+            val project = projectRows.firstOrNull { key(it.name) == key(unit.project) }
+            if (unit.id.isBlank() || unit.project.isBlank() || unit.unitCode.isBlank()) issues += "Unit ${unit.id}: ID/proyek/kode kosong."
+            if (!unit.landAreaM2.isFinite() || unit.landAreaM2 <= 0.0 ||
+                !unit.buildingAreaM2.isFinite() || unit.buildingAreaM2 < 0.0 ||
+                !unit.salePrice.isFinite() || unit.salePrice <= 0.0) issues += "Unit ${unit.id}: luas/harga tidak valid."
+            if (unit.businessModel !in setOf("Subsidi", "Komersial")) issues += "Unit ${unit.id}: segmen tidak valid."
+            if (unit.status !in setOf("Tersedia", "Booking", "Terjual", "Dibatalkan")) issues += "Unit ${unit.id}: status tidak valid."
+            if (unit.status == "Terjual" && unit.buyerName.isBlank()) issues += "Unit ${unit.id}: nama pembeli kosong."
+            if (projects != null && (project == null || project.category != "Perumahan" || project.businessModel != unit.businessModel)) {
+                issues += "Unit ${unit.id}: proyek tidak cocok dengan kategori/segmen perumahan."
+            }
+        }
+
+        projectPlans.forEach { plan ->
+            if (plan.id.isBlank() || plan.title.isBlank()) issues += "Rencana kalender ${plan.id}: ID/judul kosong."
+            if (!runCatching { requireIsoDate(plan.planDate, "Tanggal rencana") }.isSuccess) issues += "Rencana kalender ${plan.id}: tanggal tidak valid."
+            if (!plan.estimatedAmount.isFinite() || plan.estimatedAmount < 0.0) issues += "Rencana kalender ${plan.id}: estimasi tidak valid."
+            if (plan.status !in setOf("Direncanakan", "Selesai", "Batal")) issues += "Rencana kalender ${plan.id}: status tidak valid."
+            if (plan.project.isNotBlank() && projects != null && projectKeys.none { it == key(plan.project) }) {
+                issues += "Rencana kalender ${plan.id}: proyek ${plan.project} tidak terdaftar."
+            }
+        }
+        notes.forEach { note ->
+            if (note.title.isBlank()) issues += "Catatan ${note.id}: judul kosong."
+            if (!runCatching { requireIsoDate(note.date, "Tanggal catatan") }.isSuccess) issues += "Catatan ${note.id}: tanggal tidak valid."
+            if (note.priority !in setOf("Rendah", "Sedang", "Tinggi")) issues += "Catatan ${note.id}: prioritas tidak valid."
+            if (note.status !in setOf("Open", "Done", "Follow Up")) issues += "Catatan ${note.id}: status tidak valid."
+            if (note.project.isNotBlank() && projects != null && projectKeys.none { it == key(note.project) }) {
+                issues += "Catatan ${note.id}: proyek ${note.project} tidak terdaftar."
+            }
+        }
+
+        val reconciliationKeys = bankReconciliations.map { key(it.accountName) + "|" + it.period }
+        if (reconciliationKeys.distinct().size != reconciliationKeys.size) issues += "Rekonsiliasi duplikat untuk akun/periode."
+        bankReconciliations.forEach { recon ->
+            val account = accounts.firstOrNull { key(it.name) == key(recon.accountName) }
+            if (account == null) issues += "Rekonsiliasi ${recon.id}: akun ${recon.accountName} tidak terdaftar."
+            if (!recon.period.matches(Regex("""\d{4}-\d{2}""")) || !runCatching { periodEndDate(recon.period) }.isSuccess) {
+                issues += "Rekonsiliasi ${recon.id}: periode tidak valid."
+            } else if (!recon.statementBalance.isFinite() || recon.statementBalance < 0.0 ||
+                !recon.bookBalance.isFinite() || !recon.difference.isFinite()) {
+                issues += "Rekonsiliasi ${recon.id}: saldo/selisih tidak valid."
+            } else if (account != null) {
+                val expectedBook = runCatching { calculateAccountBalanceAtPeriod(account, recon.period, transactions) }.getOrNull()
+                if (expectedBook == null) {
+                    issues += "Rekonsiliasi ${recon.id}: saldo buku pada periode tidak dapat dihitung."
+                } else {
+                    val expectedDifference = recon.statementBalance - expectedBook
+                    if (kotlin.math.abs(recon.bookBalance - expectedBook) > 0.01) {
+                        issues += "Rekonsiliasi ${recon.id}: saldo buku tersimpan tidak sama dengan ledger pada periode."
+                    }
+                    if (kotlin.math.abs(recon.difference - expectedDifference) > 0.01) {
+                        issues += "Rekonsiliasi ${recon.id}: selisih tidak sama dengan saldo rekening koran dikurangi saldo buku."
+                    }
+                    val expectedStatus = if (kotlin.math.abs(expectedDifference) < 1.0) "Cocok" else "Selisih"
+                    if (recon.status != expectedStatus) issues += "Rekonsiliasi ${recon.id}: status tidak sesuai hasil perhitungan."
+                }
+            }
         }
 
         val balances = calculateAccountBalances(accounts, transactions)
@@ -1554,6 +1749,7 @@ class KasRepository(
 
         return IntegrityAuditResult(passed = issues.isEmpty(), issues = issues.distinct(), checkedAt = checkedAt)
     }
+
     // Export WhatsApp Text Formatters
     fun formatWhatsAppText(message: String, phone: String = ""): String {
         val encoded = URLEncoder.encode(message, "UTF-8")
