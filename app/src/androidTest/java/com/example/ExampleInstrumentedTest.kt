@@ -2,10 +2,12 @@ package com.example
 
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -28,8 +30,9 @@ class ExampleInstrumentedTest {
     @Test
     fun navigationOpensReportsAndPeriodDateControls() {
         composeRule.onNodeWithTag("nav_drawer_toggle").performClick()
-        composeRule.onNodeWithText("Laporan Keuangan").performClick()
-        composeRule.onNodeWithTag("laporan_screen").assertIsDisplayed()
+        composeRule.onNodeWithTag("drawer_item_laporan").performScrollTo().performClick()
+        composeRule.onNodeWithTag("laporan_screen")
+            .performScrollToNode(hasText("Tanggal Mulai"))
         composeRule.onNodeWithText("Tanggal Mulai").assertIsDisplayed()
         composeRule.onNodeWithText("Tanggal Akhir").assertIsDisplayed()
     }
@@ -37,7 +40,7 @@ class ExampleInstrumentedTest {
     @Test
     fun attendanceFormOpensWithDatePickerField() {
         composeRule.onNodeWithTag("nav_drawer_toggle").performClick()
-        composeRule.onNodeWithText("Absensi Karyawan").performClick()
+        composeRule.onNodeWithTag("drawer_item_absensi").performScrollTo().performClick()
         composeRule.onNodeWithTag("absensi_screen").assertIsDisplayed()
         composeRule.onNodeWithTag("fab_record_attendance").performClick()
         composeRule.onNodeWithTag("attendance_date_input").assertIsDisplayed()
@@ -46,9 +49,13 @@ class ExampleInstrumentedTest {
     @Test
     fun backupScreenExposesRealFileImportAndExportControls() {
         composeRule.onNodeWithTag("nav_drawer_toggle").performClick()
-        composeRule.onNodeWithText("Cadangan & Pulihkan").performClick()
+        composeRule.onNodeWithTag("drawer_item_backup").performScrollTo().performClick()
         composeRule.onNodeWithTag("backup_restore_screen").assertIsDisplayed()
+        composeRule.onNodeWithTag("backup_restore_screen")
+            .performScrollToNode(hasText("Simpan Backup JSON"))
         composeRule.onNodeWithText("Simpan Backup JSON").assertIsDisplayed()
+        composeRule.onNodeWithTag("backup_restore_screen")
+            .performScrollToNode(hasText("Pulihkan dari File Backup"))
         composeRule.onNodeWithText("Pulihkan dari File Backup").assertIsDisplayed()
         composeRule.onNodeWithTag("backup_restore_screen")
             .performScrollToNode(hasTestTag("spreadsheet_export"))
