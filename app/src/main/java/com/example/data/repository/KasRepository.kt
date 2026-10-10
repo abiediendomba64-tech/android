@@ -32,6 +32,7 @@ import kotlinx.coroutines.flow.first
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
+import java.text.ParsePosition
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Calendar
@@ -175,13 +176,21 @@ class KasRepository(
     private fun requireIsoDate(value: String, field: String) {
         require(value.matches(Regex("""\d{4}-\d{2}-\d{2}"""))) { field + " harus YYYY-MM-DD." }
         val parser = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { isLenient = false }
-        require(runCatching { parser.parse(value) }.isSuccess) { field + " bukan tanggal kalender yang valid." }
+        val position = ParsePosition(0)
+        val parsed = parser.parse(value, position)
+        require(parsed != null && position.index == value.length && parser.format(parsed) == value) {
+            field + " bukan tanggal kalender yang valid."
+        }
     }
 
     private fun requireIsoTime(value: String, field: String) {
         require(value.matches(Regex("""\d{2}:\d{2}:\d{2}"""))) { field + " harus HH:mm:ss." }
         val parser = SimpleDateFormat("HH:mm:ss", Locale.US).apply { isLenient = false }
-        require(runCatching { parser.parse(value) }.isSuccess) { field + " bukan waktu yang valid." }
+        val position = ParsePosition(0)
+        val parsed = parser.parse(value, position)
+        require(parsed != null && position.index == value.length && parser.format(parsed) == value) {
+            field + " bukan waktu yang valid."
+        }
     }
 
     private suspend fun validateTransaction(
@@ -2110,8 +2119,8 @@ class KasRepository(
                     val archivedBy = cell(row, "Diarsipkan Oleh", "Archived By").takeIf { it.isNotBlank() }
 
                     require(type in setOf("MASUK", "KELUAR", "TRANSFER")) { "tipe transaksi tidak valid" }
-                    require(date.matches(Regex("""\d{4}-\d{2}-\d{2}"""))) { "tanggal harus YYYY-MM-DD" }
-                    require(time.matches(Regex("""\d{2}:\d{2}:\d{2}"""))) { "jam harus HH:mm:ss" }
+                    requireIsoDate(date, "Tanggal spreadsheet")
+                    requireIsoTime(time, "Jam spreadsheet")
                     require(name.isNotBlank()) { "nama transaksi wajib diisi" }
                     require(category.isNotBlank()) { "kategori wajib diisi" }
                     require(status in setOf("Selesai", "Draft", "Pending", "Batal", "Dihapus")) { "status tidak valid" }

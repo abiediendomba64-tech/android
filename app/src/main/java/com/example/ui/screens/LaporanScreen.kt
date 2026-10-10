@@ -28,8 +28,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -49,6 +47,7 @@ import com.example.ui.KasViewModel
 import com.example.ui.components.DetailRow
 import com.example.ui.components.EmptyStateView
 import com.example.ui.components.FormDropdown
+import com.example.ui.components.IsoDatePickerField
 import com.example.ui.components.TransactionRowItem
 import com.example.ui.components.formatRupiah
 import com.example.ui.theme.ExpenseRed
@@ -221,26 +220,23 @@ fun LaporanScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        OutlinedTextField(
+                        IsoDatePickerField(
                             value = startDate,
-                            onValueChange = { startDate = it },
-                            label = { Text("Tgl Mulai") },
-                            modifier = Modifier.weight(1f),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedContainerColor = MaterialTheme.colorScheme.surface,
-                                unfocusedContainerColor = MaterialTheme.colorScheme.surface
-                            )
+                            label = "Tanggal Mulai",
+                            onDateSelected = { picked ->
+                                startDate = picked
+                                if (picked > endDate) endDate = picked
+                            },
+                            modifier = Modifier.weight(1f)
                         )
-
-                        OutlinedTextField(
+                        IsoDatePickerField(
                             value = endDate,
-                            onValueChange = { endDate = it },
-                            label = { Text("Tgl Akhir") },
-                            modifier = Modifier.weight(1f),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedContainerColor = MaterialTheme.colorScheme.surface,
-                                unfocusedContainerColor = MaterialTheme.colorScheme.surface
-                            )
+                            label = "Tanggal Akhir",
+                            onDateSelected = { picked ->
+                                endDate = picked
+                                if (picked < startDate) startDate = picked
+                            },
+                            modifier = Modifier.weight(1f)
                         )
                     }
 

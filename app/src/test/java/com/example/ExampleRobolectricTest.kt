@@ -451,6 +451,38 @@ class ExampleRobolectricTest {
     }
 
     @Test
+    fun invalidCalendarDatesAndTrailingCharactersAreRejected() = runBlocking {
+        db.employeeDao().insertEmployee(
+            EmployeeEntity(
+                id = "EMP-STRICT-DATE",
+                name = "Tester Tanggal",
+                position = "Staff",
+                department = "Operasional",
+                phone = ""
+            )
+        )
+        val invalidDates = listOf("2026-02-31", "2026-13-01", "2026-10-08junk", "2026-1-08")
+        invalidDates.forEachIndexed { index, date ->
+            try {
+                repository.saveAttendance(
+                    AttendanceEntity(
+                        id = "ATT-STRICT-$index",
+                        employeeId = "EMP-STRICT-DATE",
+                        employeeName = "Tester Tanggal",
+                        department = "Operasional",
+                        date = date,
+                        status = "Hadir"
+                    )
+                )
+                throw AssertionError("Tanggal tidak valid seharusnya ditolak: $date")
+            } catch (e: IllegalArgumentException) {
+                assertTrue(e.message?.contains("Tanggal absensi") == true)
+            }
+        }
+        assertTrue(db.attendanceDao().getAllAttendances().first().isEmpty())
+    }
+
+    @Test
     fun attendanceDateValidationAcceptsIsoDate() = runBlocking {
         db.employeeDao().insertEmployee(
             EmployeeEntity(
