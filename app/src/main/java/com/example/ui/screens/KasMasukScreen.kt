@@ -32,6 +32,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -63,11 +64,12 @@ fun KasMasukScreen(
     viewModel: KasViewModel,
     modifier: Modifier = Modifier
 ) {
-    val accounts by viewModel.accounts.collectAsStateWithLifecycle()
+    val accounts by viewModel.activeAccounts.collectAsStateWithLifecycle()
     val projects by viewModel.activeProjects.collectAsStateWithLifecycle()
     val transactions by viewModel.activeTransactions.collectAsStateWithLifecycle()
+    val ledgerTransactions by viewModel.ledgerTransactions.collectAsStateWithLifecycle()
     val kasMasukList = transactions.filter { it.type == "MASUK" }
-    val totalMasuk = kasMasukList.filter { it.status == "Selesai" }.sumOf { it.amount }
+    val totalMasuk = ledgerTransactions.filter { it.type == "MASUK" && it.status == "Selesai" }.sumOf { it.amount }
 
     val todayStr = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()) }
 
@@ -95,6 +97,10 @@ fun KasMasukScreen(
     var formErrorBanner by remember { mutableStateOf<String?>(null) }
 
     val accountNames = accounts.map { it.name }
+
+    LaunchedEffect(accountNames) {
+        if (selectedAccount !in accountNames) selectedAccount = accountNames.firstOrNull().orEmpty()
+    }
 
     fun validateForm(): Boolean {
         var isValid = true

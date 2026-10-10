@@ -73,6 +73,9 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
     val accounts: StateFlow<List<AccountEntity>> = repository.accounts
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val activeAccounts: StateFlow<List<AccountEntity>> = repository.activeAccounts
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     val budgets: StateFlow<List<BudgetEntity>> = repository.budgets
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 

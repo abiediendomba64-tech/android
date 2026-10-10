@@ -131,6 +131,7 @@ class KasRepository(
         (active + archived).distinctBy { it.id }
     }
     val accounts: Flow<List<AccountEntity>> = accountDao.getAllAccounts()
+    val activeAccounts: Flow<List<AccountEntity>> = accountDao.getAllActiveAccounts()
     val budgets: Flow<List<BudgetEntity>> = budgetDao.getAllBudgets()
     val receivables: Flow<List<ReceivableEntity>> = receivableDao.getAllReceivables()
     val notes: Flow<List<CashNoteEntity>> = noteDao.getAllNotes()

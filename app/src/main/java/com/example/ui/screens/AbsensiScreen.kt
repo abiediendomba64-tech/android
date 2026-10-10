@@ -51,6 +51,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -92,7 +93,7 @@ fun AbsensiScreen(
     val employees by viewModel.employees.collectAsStateWithLifecycle()
     val filteredAttendances by viewModel.filteredAttendances.collectAsStateWithLifecycle()
     val summary by viewModel.attendanceSummary.collectAsStateWithLifecycle()
-    val accounts by viewModel.accounts.collectAsStateWithLifecycle()
+    val accounts by viewModel.activeAccounts.collectAsStateWithLifecycle()
     val projects by viewModel.activeProjects.collectAsStateWithLifecycle()
 
     val filterMode by viewModel.attendanceFilterMode.collectAsStateWithLifecycle()
@@ -132,6 +133,10 @@ fun AbsensiScreen(
     val accountNames = accounts.map { it.name }
     val payrollRequiresMonthlyFilter = employees.any { it.monthlySalary > 0.0 } && filterMode != "Bulanan"
     var disburseAccount by remember { mutableStateOf(accountNames.firstOrNull().orEmpty()) }
+
+    LaunchedEffect(accountNames) {
+        if (disburseAccount !in accountNames) disburseAccount = accountNames.firstOrNull().orEmpty()
+    }
 
     Scaffold(
         floatingActionButton = {

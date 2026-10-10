@@ -44,6 +44,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -98,13 +99,17 @@ fun RekonsiliasiArusKasScreen(
     var endDate by remember { mutableStateOf(today) }
 
     // Bank Recon Form States
-    val bankAccountNames = accounts.filter { it.account.type == "Bank" || it.account.type == "Kas" }.map { it.account.name }
+    val bankAccountNames = accounts.filter { it.account.isActive && (it.account.type == "Bank" || it.account.type == "Kas") }.map { it.account.name }
         
     var reconAccountName by remember { mutableStateOf(bankAccountNames.firstOrNull().orEmpty()) }
     var reconPeriod by remember { mutableStateOf(SimpleDateFormat("yyyy-MM", Locale.getDefault()).format(Date())) }
     var statementBalanceInput by remember { mutableStateOf("") }
     var reconNotes by remember { mutableStateOf("") }
     var targetWaPhone by remember { mutableStateOf("") }
+
+    LaunchedEffect(bankAccountNames) {
+        if (reconAccountName !in bankAccountNames) reconAccountName = bankAccountNames.firstOrNull().orEmpty()
+    }
 
     val cashFlow = viewModel.hitungArusKas(startDate, endDate)
 
