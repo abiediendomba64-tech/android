@@ -32,8 +32,8 @@ jobs:
           gradle-version: "9.3.1"
           cache-provider: basic
 
-      - name: Build, unit test, and assemble debug APK
-        run: gradle --no-daemon clean test assembleDebug
+      - name: Build, unit tests, compile instrumented tests, and assemble debug APK
+        run: gradle --no-daemon clean test assembleDebug compileDebugAndroidTestKotlin
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v6

@@ -79,6 +79,10 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // Shared with migration regression tests so they exercise the exact production path.
+        internal val ALL_MIGRATIONS: Array<Migration> =
+            arrayOf(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+
         /**
          * Removes only rows matching the exact bootstrap records from the old v3
          * DatabaseCallback. Existing transactions and records derived from actual
@@ -152,7 +156,7 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "sistem_kas_db"
-                ).addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6).build().also { INSTANCE = it }
+                ).addMigrations(*ALL_MIGRATIONS).build().also { INSTANCE = it }
             }
         }
     }
