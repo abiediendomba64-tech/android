@@ -902,7 +902,7 @@ class KasRepository(
                     return "Bukti payroll lama ${prior.receiptNo} memiliki periode yang tidak valid; audit histori payroll sebelum melanjutkan."
                 }
                 if (requested.first <= priorRange.second && priorRange.first <= requested.second) {
-                    return "Periode payroll ${candidate} bertumpang tindih dengan payroll ${priorPeriod} yang sudah ada. Impor/pencairan dibatalkan untuk mencegah pembayaran ganda."
+                    return "Periode payroll ${candidate} sudah dicairkan atau bertumpang tindih dengan payroll ${priorPeriod} yang sudah ada. Impor/pencairan dibatalkan untuk mencegah pembayaran ganda."
                 }
             }
         }
