@@ -2100,8 +2100,8 @@ class KasRepository(
                 receivables.forEach { receivable ->
                     require(receivable.type in setOf("PIUTANG", "HUTANG")) { "Backup memiliki jenis tagihan tidak valid." }
                     require(receivable.customerName.isNotBlank()) { "Backup memiliki tagihan tanpa nama pihak." }
-                    require(receivable.date.matches(Regex("""\d{4}-\d{2}-\d{2}"""))) { "Tanggal tagihan ${receivable.id} tidak valid." }
-                    require(receivable.dueDate.matches(Regex("""\d{4}-\d{2}-\d{2}"""))) { "Jatuh tempo ${receivable.id} tidak valid." }
+                    requireIsoDate(receivable.date, "Tanggal tagihan ${receivable.id}")
+                    requireIsoDate(receivable.dueDate, "Jatuh tempo ${receivable.id}")
                     require(receivable.totalAmount.isFinite() && receivable.totalAmount > 0.0) { "Nominal tagihan ${receivable.id} tidak valid." }
                     require(receivable.paidAmount.isFinite() && receivable.paidAmount >= 0.0 && receivable.paidAmount <= receivable.totalAmount) { "Pembayaran tagihan ${receivable.id} tidak valid." }
                     require(accountDao.getAccountByName(receivable.targetAccount) != null) { "Akun tagihan ${receivable.id} tidak terdaftar." }
@@ -2123,7 +2123,7 @@ class KasRepository(
                 attendances.forEach { attendance ->
                     require(attendance.employeeId.isNotBlank()) { "Absensi ${attendance.id} tanpa employeeId." }
                     require(employeeDao.getEmployeeById(attendance.employeeId) != null) { "Absensi ${attendance.id} menunjuk karyawan yang tidak ada." }
-                    require(attendance.date.matches(Regex("""\d{4}-\d{2}-\d{2}"""))) { "Tanggal absensi ${attendance.id} tidak valid." }
+                    requireIsoDate(attendance.date, "Tanggal absensi ${attendance.id}")
                     require(attendance.status in setOf("Hadir", "Izin", "Sakit", "Alpa", "Cuti")) { "Status absensi ${attendance.id} tidak valid." }
                     require(attendance.overtimeHours.isFinite() && attendance.overtimeHours >= 0.0) { "Jam lembur ${attendance.id} tidak valid." }
                     require(attendance.dailyAllowance.isFinite() && attendance.dailyAllowance >= 0.0) { "Uang harian " + attendance.id + " tidak valid." }
@@ -2173,7 +2173,7 @@ class KasRepository(
 
                 if (notes.isNotEmpty()) {
                     notes.forEach { note ->
-                        require(note.date.matches(Regex("""\d{4}-\d{2}-\d{2}"""))) { "Tanggal catatan ${note.id} tidak valid." }
+                        requireIsoDate(note.date, "Tanggal catatan ${note.id}")
                         require(note.title.isNotBlank()) { "Catatan ${note.id} tidak memiliki judul." }
                         require(note.priority in setOf("Rendah", "Sedang", "Tinggi")) { "Prioritas catatan ${note.id} tidak valid." }
                         require(note.status in setOf("Open", "Done", "Follow Up")) { "Status catatan " + note.id + " tidak valid." }
@@ -2515,33 +2515,82 @@ class KasRepository(
 
     private fun parseSpreadsheetAmount(raw: String): Double {
         val value = raw.trim()
-            .removePrefix("+")
             .replace(Regex("""(?i)rp"""), "")
-            .replace(" ", "")
+            .replace(Regex("""[\s\u00A0]"""), "")
         require(value.isNotBlank()) { "nominal wajib diisi" }
 
-        val normalized = when {
-            value.contains('.') && value.contains(',') -> {
-                if (value.lastIndexOf(',') > value.lastIndexOf('.')) {
-                    value.replace(".", "").replace(',', '.')
-                } else {
-                    value.replace(",", "")
-                }
-            }
-            value.count { it == ',' } == 1 -> {
-                val parts = value.split(',')
-                if (parts[1].length in 1..2) parts[0] + "." + parts[1] else parts.joinToString("")
-            }
-            value.count { it == '.' } == 1 -> {
-                val parts = value.split('.')
-                if (parts[1].length in 1..2) value else parts.joinToString("")
-            }
-            else -> value.replace(",", "").replace(".", "")
+        val negative = value.startsWith("-")
+        val unsigned = value.removePrefix("+").removePrefix("-")
+        require(unsigned.isNotBlank() && unsigned.all { it.isDigit() || it == '.' || it == ',' }) {
+            "format nominal tidak valid: $raw"
         }
 
-        return normalized.toDoubleOrNull()
+        fun groupedDigits(integer: String, separator: Char?): String {
+            if (separator == null || !integer.contains(separator)) {
+                require(integer.matches(Regex("""\d+"""))) { "format nominal tidak valid: $raw" }
+                return integer
+            }
+            val groups = integer.split(separator)
+            require(
+                groups.firstOrNull()?.matches(Regex("""\d{1,3}""")) == true &&
+                    groups.drop(1).all { it.matches(Regex("""\d{3}""")) }
+            ) { "pemisah ribuan nominal tidak valid: $raw" }
+            return groups.joinToString("")
+        }
+
+        val dotCount = unsigned.count { it == '.' }
+        val commaCount = unsigned.count { it == ',' }
+        val normalized = when {
+            dotCount > 0 && commaCount > 0 -> {
+                val decimalSeparator = if (unsigned.lastIndexOf(',') > unsigned.lastIndexOf('.')) ',' else '.'
+                val groupingSeparator = if (decimalSeparator == ',') '.' else ','
+                require(unsigned.count { it == decimalSeparator } == 1) {
+                    "format desimal nominal tidak valid: $raw"
+                }
+                val decimalIndex = unsigned.lastIndexOf(decimalSeparator)
+                val integerPart = unsigned.substring(0, decimalIndex)
+                val fractionPart = unsigned.substring(decimalIndex + 1)
+                require(fractionPart.matches(Regex("""\d{1,2}"""))) {
+                    "angka desimal nominal harus 1-2 digit: $raw"
+                }
+                val integerDigits = groupedDigits(
+                    integerPart,
+                    groupingSeparator.takeIf { integerPart.contains(it) }
+                )
+                "$integerDigits.$fractionPart"
+            }
+            dotCount > 1 || commaCount > 1 -> {
+                val separator = if (dotCount > 1) '.' else ','
+                require(if (separator == '.') commaCount == 0 else dotCount == 0) {
+                    "format nominal tidak valid: $raw"
+                }
+                groupedDigits(unsigned, separator)
+            }
+            dotCount == 1 || commaCount == 1 -> {
+                val separator = if (dotCount == 1) '.' else ','
+                val index = unsigned.indexOf(separator)
+                val integerPart = unsigned.substring(0, index)
+                val fractionPart = unsigned.substring(index + 1)
+                require(integerPart.matches(Regex("""\d+""")) && fractionPart.matches(Regex("""\d+"""))) {
+                    "format nominal tidak valid: $raw"
+                }
+                when {
+                    fractionPart.length in 1..2 -> "$integerPart.$fractionPart"
+                    fractionPart.length == 3 && integerPart.length <= 3 ->
+                        groupedDigits(unsigned, separator)
+                    else -> throw IllegalArgumentException("format nominal tidak valid: $raw")
+                }
+            }
+            else -> {
+                require(unsigned.matches(Regex("""\d+"""))) { "format nominal tidak valid: $raw" }
+                unsigned
+            }
+        }
+
+        val signed = if (negative) "-$normalized" else normalized
+        return signed.toDoubleOrNull()
             ?.also { require(it.isFinite()) { "nominal tidak valid" } }
-            ?: throw IllegalArgumentException("nominal tidak dapat dibaca: " + raw)
+            ?: throw IllegalArgumentException("nominal tidak dapat dibaca: $raw")
     }
 
     private fun parseSpreadsheetBoolean(raw: String): Boolean =
@@ -2555,15 +2604,22 @@ class KasRepository(
         SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.getDefault()).format(Date(timestamp))
 
     private fun parseSpreadsheetTimestamp(raw: String): Long {
-        raw.toLongOrNull()?.let {
+        val value = raw.trim()
+        value.toLongOrNull()?.let {
             require(it > 0L) { "timestamp harus lebih besar dari 0" }
             return it
         }
-        val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.getDefault()).apply {
+        val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).apply {
             isLenient = false
         }
-        return formatter.parse(raw)?.time
-            ?: throw IllegalArgumentException("timestamp tidak valid: " + raw)
+        val position = ParsePosition(0)
+        val parsed = formatter.parse(value, position)
+        require(
+            parsed != null &&
+                position.index == value.length &&
+                formatter.format(parsed) == value
+        ) { "timestamp tidak valid: $raw" }
+        return parsed.time
     }
     fun generatePrintableSummaryText(
         companyName: String,
