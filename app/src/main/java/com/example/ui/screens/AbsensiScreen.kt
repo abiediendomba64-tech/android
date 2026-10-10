@@ -91,6 +91,7 @@ fun AbsensiScreen(
 ) {
     val context = LocalContext.current
     val employees by viewModel.employees.collectAsStateWithLifecycle()
+    val payrollEmployees by viewModel.payrollEmployees.collectAsStateWithLifecycle()
     val filteredAttendances by viewModel.filteredAttendances.collectAsStateWithLifecycle()
     val summary by viewModel.attendanceSummary.collectAsStateWithLifecycle()
     val accounts by viewModel.activeAccounts.collectAsStateWithLifecycle()
@@ -131,7 +132,7 @@ fun AbsensiScreen(
     var attProject by remember { mutableStateOf("") }
 
     val accountNames = accounts.map { it.name }
-    val payrollRequiresMonthlyFilter = employees.any { it.monthlySalary > 0.0 } && filterMode != "Bulanan"
+    val payrollRequiresMonthlyFilter = payrollEmployees.any { it.monthlySalary > 0.0 } && filterMode != "Bulanan"
     var disburseAccount by remember { mutableStateOf(accountNames.firstOrNull().orEmpty()) }
 
     LaunchedEffect(accountNames) {
@@ -429,16 +430,16 @@ fun AbsensiScreen(
             }
 
             // Breakdown Per Karyawan (When in Bulanan, Tahunan, or Periodik)
-            if (employees.isNotEmpty()) {
+            if (payrollEmployees.isNotEmpty()) {
                 item {
                     Text(
-                        text = "Rekapitulasi Karyawan & Slip Gaji (${employees.size})",
+                        text = "Rekapitulasi Karyawan & Slip Gaji (${payrollEmployees.size})",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
                 }
 
-                items(employees) { emp ->
+                items(payrollEmployees) { emp ->
                     val empAtts = filteredAttendances.filter { it.employeeId == emp.id }
                     val hadirCount = empAtts.count { it.status == "Hadir" }
                     val izinCount = empAtts.count { it.status == "Izin" }
@@ -459,11 +460,15 @@ fun AbsensiScreen(
                                     Text(text = "${emp.position} • Divisi ${emp.department} • Gaji: ${formatRupiah(emp.monthlySalary)}", fontSize = 11.sp, color = MaterialTheme.colorScheme.outline)
                                 }
 
-                                IconButton(
-                                    onClick = { employeeToDelete = emp },
-                                    modifier = Modifier.size(28.dp)
-                                ) {
-                                    Icon(imageVector = Icons.Default.Delete, contentDescription = "Hapus", tint = MaterialTheme.colorScheme.outline, modifier = Modifier.size(16.dp))
+                                if (emp.isActive) {
+                                    IconButton(
+                                        onClick = { employeeToDelete = emp },
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(imageVector = Icons.Default.Delete, contentDescription = "Hapus", tint = MaterialTheme.colorScheme.outline, modifier = Modifier.size(16.dp))
+                                    }
+                                } else {
+                                    Text("Histori • nonaktif", fontSize = 10.sp, color = MaterialTheme.colorScheme.outline)
                                 }
                             }
 
@@ -780,7 +785,7 @@ fun AbsensiScreen(
 
     // Modal Disburse Salary to Kas Keluar
     if (showDisburseSalaryDialog) {
-        val totalDisburse = viewModel.hitungTotalPayroll(employees, filteredAttendances)
+        val totalDisburse = viewModel.hitungTotalPayroll(payrollEmployees, filteredAttendances)
         val periodText = when (filterMode) {
             "Harian" -> selectedDate
             "Bulanan" -> selectedMonth
@@ -851,10 +856,10 @@ fun AbsensiScreen(
             title = { Text("Pilih Karyawan untuk Slip Gaji", fontWeight = FontWeight.Bold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (employees.isEmpty()) {
+                    if (payrollEmployees.isEmpty()) {
                         Text("Belum ada data karyawan terdaftar.")
                     } else {
-                        employees.forEach { emp ->
+                        payrollEmployees.forEach { emp ->
                             Card(
                                 onClick = {
                                     selectedEmployeeForPayslip = emp

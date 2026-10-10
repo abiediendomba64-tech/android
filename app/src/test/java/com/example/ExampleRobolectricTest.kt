@@ -1555,4 +1555,162 @@ class ExampleRobolectricTest {
         assertEquals("Selesai", db.transactionDao().getTransactionById(payroll.id)?.status)
     }
 
+
+    @Test
+    fun archivedTransactionCanBeRestoredAfterItsAccountIsDeactivated() = runBlocking {
+        val account = AccountEntity("acc-archive-inactive", "Bank Histori", "Bank", 200000.0)
+        db.accountDao().insertAccount(account)
+        val transaction = TransactionEntity(
+            id = "TX-ARCHIVE-INACTIVE",
+            type = "MASUK",
+            date = "2026-10-05",
+            time = "10:00:00",
+            account = account.name,
+            name = "Penerimaan historis",
+            category = "Penjualan",
+            description = "Dibuat saat akun aktif",
+            amount = 50000.0,
+            status = "Selesai"
+        )
+        repository.saveTransaction(transaction)
+        repository.archiveTransaction(transaction.id)
+        db.accountDao().updateAccount(account.copy(isActive = false))
+
+        repository.restoreTransaction(transaction.id)
+
+        val restored = db.transactionDao().getTransactionById(transaction.id)
+        assertNotNull(restored)
+        assertFalse(restored!!.isArchived)
+        assertEquals(account.name, restored.account)
+        val balance = repository.calculateAccountBalances(
+            db.accountDao().getAllAccounts().first(),
+            db.transactionDao().getAllActiveTransactions().first() +
+                db.transactionDao().getArchivedTransactions().first()
+        ).single()
+        assertEquals(250000.0, balance.currentBalance, 0.01)
+    }
+
+    @Test
+    fun newReceivableCannotStartAsAlreadyPaidWithoutLinkedLedgerPayment() = runBlocking {
+        db.accountDao().insertAccount(AccountEntity("acc-new-piu-validation", "Kas Tagihan", "Kas", 100000.0))
+        val paidReceivable = com.example.data.model.ReceivableEntity(
+            id = "PIU-PAID-ON-CREATE",
+            date = "2026-10-01",
+            customerName = "Pelanggan Baru",
+            description = "Master baru tanpa transaksi",
+            totalAmount = 200000.0,
+            paidAmount = 50000.0,
+            dueDate = "2026-12-01",
+            targetAccount = "Kas Tagihan"
+        )
+        try {
+            repository.saveReceivable(paidReceivable)
+            throw AssertionError("Master tagihan baru tidak boleh menyatakan pembayaran yang belum masuk ledger.")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message?.contains("pembayaran Rp 0") == true)
+        }
+        val markedPaid = paidReceivable.copy(id = "PIU-LUNAS-ON-CREATE", paidAmount = 0.0, status = "Lunas")
+        try {
+            repository.saveReceivable(markedPaid)
+            throw AssertionError("Master tagihan baru tidak boleh langsung Lunas tanpa transaksi pembayaran.")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message?.contains("status Lunas") == true)
+        }
+        assertTrue(db.receivableDao().getAllReceivables().first().isEmpty())
+    }
+
+    @Test
+    fun inactiveEmployeesCannotReceiveNewAttendanceButRemainEligibleForHistoricalPayroll() = runBlocking {
+        val active = EmployeeEntity(
+            id = "EMP-PAYROLL-ACTIVE",
+            name = "Karyawan Aktif",
+            position = "Staf",
+            department = "PT",
+            phone = "",
+            dailyRate = 100000.0,
+            monthlySalary = 1000000.0,
+            isActive = true
+        )
+        val inactiveWithAttendance = EmployeeEntity(
+            id = "EMP-PAYROLL-INACTIVE-WORKED",
+            name = "Karyawan Nonaktif Pernah Bekerja",
+            position = "Staf",
+            department = "PT",
+            phone = "",
+            dailyRate = 100000.0,
+            monthlySalary = 2000000.0,
+            isActive = false
+        )
+        val inactiveWithoutAttendance = EmployeeEntity(
+            id = "EMP-PAYROLL-INACTIVE-NO-ATT",
+            name = "Karyawan Nonaktif Tanpa Absensi",
+            position = "Staf",
+            department = "PT",
+            phone = "",
+            dailyRate = 100000.0,
+            monthlySalary = 3000000.0,
+            isActive = false
+        )
+        db.employeeDao().insertEmployees(listOf(active, inactiveWithAttendance, inactiveWithoutAttendance))
+        val attendance = AttendanceEntity(
+            id = "ATT-EMP-PAYROLL-INACTIVE-WORKED",
+            employeeId = inactiveWithAttendance.id,
+            employeeName = inactiveWithAttendance.name,
+            department = inactiveWithAttendance.department,
+            date = "2026-10-05",
+            status = "Hadir",
+            dailyAllowance = 100000.0
+        )
+        db.attendanceDao().insertAttendance(attendance)
+
+        val eligible = repository.selectPayrollEligibleEmployees(
+            db.employeeDao().getAllEmployees().first(),
+            listOf(attendance)
+        )
+        assertEquals(setOf(active.id, inactiveWithAttendance.id), eligible.map { it.id }.toSet())
+        val allocations = repository.calculatePayrollAllocations(eligible, listOf(attendance))
+        assertEquals(3100000.0, allocations.values.sum(), 0.01)
+
+        try {
+            repository.saveAttendance(
+                AttendanceEntity(
+                    id = "ATT-INACTIVE-NEW",
+                    employeeId = inactiveWithAttendance.id,
+                    employeeName = inactiveWithAttendance.name,
+                    department = inactiveWithAttendance.department,
+                    date = "2026-10-06",
+                    status = "Hadir",
+                    dailyAllowance = 100000.0
+                )
+            )
+            throw AssertionError("Absensi baru untuk karyawan nonaktif harus ditolak.")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message?.contains("karyawan nonaktif") == true)
+        }
+        assertNull(db.attendanceDao().getAttendanceById("ATT-INACTIVE-NEW"))
+    }
+
+    @Test
+    fun csvImportCanPreserveHistoricalTransactionsOnInactiveAccounts() = runBlocking {
+        db.accountDao().insertAccount(AccountEntity("acc-csv-inactive", "Bank Bekas", "Bank", 100000.0, isActive = false))
+        val header = listOf(
+            "ID", "Tipe", "Tanggal", "Jam", "Akun", "Ke Akun", "Nama Transaksi", "Kategori",
+            "Keterangan", "Nominal", "Alokasi", "PIC", "Bukti", "No Bukti", "Proyek",
+            "Catatan", "Status", "Waktu Input", "Input Oleh", "Diarsipkan", "Waktu Arsip",
+            "Diarsipkan Oleh", "Kelompok Dana"
+        ).joinToString(",")
+        val row = listOf(
+            "TX-CSV-INACTIVE-HISTORY", "MASUK", "2026-10-04", "09:00:00", "Bank Bekas", "",
+            "Penerimaan lama", "Penjualan", "Data historis", "75000", "Operasional", "Bendahara",
+            "", "", "", "", "Selesai", "", "Spreadsheet Import", "TIDAK", "", "", "PT"
+        ).joinToString(",")
+        val imported = repository.importTransactionsFromCsv("$header\n$row\n")
+        assertTrue("CSV historis pada akun nonaktif harus dapat diimpor: ${imported.exceptionOrNull()?.message}", imported.isSuccess)
+        assertEquals(
+            75000.0,
+            db.transactionDao().getAllActiveTransactions().first().single().amount,
+            0.01
+        )
+    }
+
 }

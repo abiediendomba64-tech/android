@@ -34,6 +34,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -134,6 +135,13 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
             "Periodik" -> list.filter { it.date in start..end }
             else -> list
         }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val payrollEmployees: StateFlow<List<EmployeeEntity>> = combine(
+        allEmployees,
+        filteredAttendances
+    ) { employeeList, attendanceList ->
+        repository.selectPayrollEligibleEmployees(employeeList, attendanceList)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val attendanceSummary: StateFlow<AttendanceSummary> = filteredAttendances.map { list ->
@@ -663,9 +671,14 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         onSuccess: () -> Unit
     ) {
         launchSafely {
+            val attendanceSnapshot = filteredAttendances.value
+            val eligibleEmployees = repository.selectPayrollEligibleEmployees(
+                allEmployees = repository.allEmployees.first(),
+                attendances = attendanceSnapshot
+            )
             val allocationsByProject = repository.calculatePayrollAllocations(
-                employees = employees.value,
-                attendances = filteredAttendances.value
+                employees = eligibleEmployees,
+                attendances = attendanceSnapshot
             )
             val payrollTotal = allocationsByProject.values.sum()
             require(totalGaji.isFinite() && totalGaji > 0.0) { "Total payroll harus lebih besar dari Rp 0." }

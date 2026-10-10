@@ -280,7 +280,10 @@ class KasRepository(
             val current = transactionDao.getTransactionById(id)
                 ?: throw IllegalArgumentException("Transaksi " + id + " tidak ditemukan.")
             require(current.isArchived) { "Transaksi " + id + " tidak sedang diarsipkan." }
-            validateTransaction(current.copy(isArchived = false, archivedAt = null, archivedBy = null))
+            validateTransaction(
+                current.copy(isArchived = false, archivedAt = null, archivedBy = null),
+                allowInactiveAccountReferences = true
+            )
             transactionDao.restoreTransaction(id)
             auditDao.insertAuditLog(
                 AuditLogEntity(
@@ -542,9 +545,13 @@ class KasRepository(
         require(receivable.customerName.isNotBlank()) { "Nama pihak wajib diisi." }
         requireIsoDate(receivable.date, "Tanggal pencatatan")
         require(receivable.totalAmount.isFinite() && receivable.totalAmount > 0.0) { "Nominal tagihan harus lebih besar dari Rp 0." }
-        require(receivable.paidAmount.isFinite() && receivable.paidAmount >= 0.0 && receivable.paidAmount <= receivable.totalAmount) { "Nominal pembayaran tagihan tidak valid." }
+        require(receivable.paidAmount.isFinite() && receivable.paidAmount == 0.0) {
+            "Tagihan baru harus dimulai dengan pembayaran Rp 0; catat pembayaran melalui menu Pembayaran Tagihan agar master dan ledger tetap sinkron."
+        }
         requireIsoDate(receivable.dueDate, "Tanggal jatuh tempo")
-        require(receivable.status in setOf("Belum Jatuh Tempo", "Jatuh Tempo", "Lunas")) { "Status tagihan tidak valid." }
+        require(receivable.status in setOf("Belum Jatuh Tempo", "Jatuh Tempo")) {
+            "Tagihan baru tidak dapat langsung berstatus Lunas. Catat pembayaran melalui menu Pembayaran Tagihan."
+        }
         require(accountDao.getAccountByName(receivable.targetAccount)?.isActive == true) { "Akun terkait tidak terdaftar atau nonaktif." }
         require(receivable.fundBucket in setOf("PT", "Perdagangan", "Dana Talang", "Pribadi", "Darurat")) { "Kelompok dana tagihan tidak valid." }
         if (receivable.project.isNotBlank()) require(projectDao.getProjectByName(receivable.project)?.isActive == true) {
@@ -748,7 +755,9 @@ class KasRepository(
                 "ID absensi " + attendance.id + " sudah digunakan."
             }
             require(attendance.employeeId.isNotBlank()) { "ID karyawan wajib diisi." }
-            require(employeeDao.getEmployeeById(attendance.employeeId) != null) { "Karyawan tidak ditemukan." }
+            val employee = employeeDao.getEmployeeById(attendance.employeeId)
+                ?: throw IllegalArgumentException("Karyawan tidak ditemukan.")
+            require(employee.isActive) { "Absensi baru tidak dapat dicatat untuk karyawan nonaktif." }
             requireIsoDate(attendance.date, "Tanggal absensi")
             val paidPayroll = paidPayrollCoveringDate(attendance.date)
             require(paidPayroll == null) {
@@ -1135,6 +1144,14 @@ class KasRepository(
             closingBalance = closingBal
         )
     }
+    fun selectPayrollEligibleEmployees(
+        allEmployees: List<EmployeeEntity>,
+        attendances: List<AttendanceEntity>
+    ): List<EmployeeEntity> {
+        val employeesWithAttendance = attendances.mapTo(mutableSetOf()) { it.employeeId }
+        return allEmployees.filter { it.isActive || it.id in employeesWithAttendance }
+    }
+
     fun calculatePayrollForEmployee(
         employee: EmployeeEntity,
         attendances: List<AttendanceEntity>
@@ -2207,7 +2224,7 @@ class KasRepository(
                         project=project, note=note, status=status, inputTime=inputTime, inputBy=inputBy,
                         isArchived=isArchived, archivedAt=archivedAt, archivedBy=archivedBy, fundBucket=fundBucket
                     )
-                    validateTransaction(tx)
+                    validateTransaction(tx, allowInactiveAccountReferences = true)
                     when {
                         receiptNo.startsWith("PIU-", ignoreCase = true) -> {
                             require(type == "MASUK" && category.equals("Piutang Masuk", ignoreCase = true) && status == "Selesai") {
