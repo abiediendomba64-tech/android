@@ -1582,7 +1582,7 @@ class KasRepository(
                     val range = period?.let { runCatching { payrollPeriodRange(it) }.getOrNull() }
                     if (range == null) issues += "Transaksi payroll ${tx.id}: periode bukti tidak valid."
                     else if (tx.type == "KELUAR" && tx.category.equals("Gaji", ignoreCase = true) && tx.status == "Selesai") {
-                        payrollPeriods += period!! to range
+                        payrollPeriods.add(period!! to range)
                     }
                 }
                 receipt.startsWith("PIU-", ignoreCase = true) -> {
@@ -1600,10 +1600,13 @@ class KasRepository(
         val distinctPayrollPeriods = payrollPeriods.distinctBy { it.first.lowercase(Locale.ROOT) }
         for (i in distinctPayrollPeriods.indices) {
             for (j in i + 1 until distinctPayrollPeriods.size) {
-                val a = distinctPayrollPeriods[i]
-                val b = distinctPayrollPeriods[j]
-                if (a.first != b.first && a.second.first <= b.second.second && b.second.first <= a.second.second) {
-                    issues += "Periode payroll ${a.first} bertumpang tindih dengan ${b.first} pada ledger."
+                val currentPeriod = distinctPayrollPeriods[i]
+                val otherPeriod = distinctPayrollPeriods[j]
+                if (currentPeriod.first != otherPeriod.first &&
+                    currentPeriod.second.first <= otherPeriod.second.second &&
+                    otherPeriod.second.first <= currentPeriod.second.second
+                ) {
+                    issues += "Periode payroll ${currentPeriod.first} bertumpang tindih dengan ${otherPeriod.first} pada ledger."
                 }
             }
         }
@@ -2347,12 +2350,27 @@ class KasRepository(
                 val allAccountRows = existingAccounts + accounts
                 val allEmployeeRows = existingEmployees + employees
                 val projectNameKeys = allProjectRows.map { normalizedKey(it.name) }
-                require(projectNameKeys.distinct().size == projectNameKeys.size) {
-                    "Backup atau database tujuan memiliki nama proyek duplikat."
+                require(projectNameKeys.none { it.isBlank() } && projectNameKeys.distinct().size == projectNameKeys.size) {
+                    "Backup atau database tujuan memiliki nama proyek kosong/duplikat."
                 }
                 require(projects.none { incoming ->
                     existingProjects.any { normalizedKey(it.name) == normalizedKey(incoming.name) }
                 }) { "Backup bentrok dengan nama proyek yang sudah ada di database." }
+                projects.forEach { project ->
+                    require(project.name.isNotBlank()) { "Backup memiliki proyek tanpa nama." }
+                    require(project.category in setOf("Pembebasan Tanah", "Cut & Fill", "Perumahan", "Perdagangan", "Operasional PT", "Lainnya")) {
+                        "Jenis proyek backup tidak valid."
+                    }
+                    require(project.businessModel in setOf("Subsidi", "Komersial", "Tidak berlaku") &&
+                        (project.category == "Perumahan" || project.businessModel == "Tidak berlaku")) {
+                        "Model bisnis backup tidak sesuai jenis proyek."
+                    }
+                    requireIsoDate(project.startDate, "Tanggal mulai proyek backup")
+                    requireIsoDate(project.targetEndDate, "Tanggal target proyek backup")
+                    require(project.targetEndDate >= project.startDate) { "Target proyek backup lebih awal daripada tanggal mulai." }
+                    require(project.budgetAmount.isFinite() && project.budgetAmount >= 0.0) { "Pagu proyek backup tidak valid." }
+                    require(project.status in setOf("Berjalan", "Ditunda", "Selesai")) { "Status proyek backup tidak valid." }
+                }
 
                 val budgetScopes = budgets.map { budgetScope(it.period, it.category, it.project, it.fundBucket) }
                 require(budgetScopes.distinct().size == budgetScopes.size) {
