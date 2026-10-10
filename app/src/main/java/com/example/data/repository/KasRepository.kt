@@ -955,7 +955,6 @@ class KasRepository(
     ): String {
         require(totalAmount.isFinite() && totalAmount > 0.0) { "Total payroll harus lebih besar dari Rp 0." }
         require(period.isNotBlank()) { "Periode payroll wajib diisi." }
-        val requestedPayrollRange = payrollPeriodRange(period)
         require(allocationsByProject.isNotEmpty() && allocationsByProject.values.all { it.isFinite() && it >= 0.0 }) {
             "Alokasi payroll per proyek tidak valid."
         }
@@ -2188,7 +2187,6 @@ class KasRepository(
                     existingReconciliations.any { reconciliationScope(it.accountName, it.period) == reconciliationScope(incoming.accountName, incoming.period) }
                 }) { "Backup bentrok dengan rekonsiliasi akun/bulan yang sudah ada." }
 
-                val accountNameKeys = allAccountRows.map { normalizedKey(it.name) }
                 val employeeIdSet = allEmployeeRows.map { it.id }.toSet()
                 val projectByName = allProjectRows.associateBy { normalizedKey(it.name) }
                 val receivableById = allReceivableRows.associateBy { it.id }
@@ -2324,7 +2322,7 @@ class KasRepository(
                     }
                 }
 
-                accounts.forEach { accountDao.insertAccount(it.copy(name = account.name.trim())) }
+                accounts.forEach { account -> accountDao.insertAccount(account.copy(name = account.name.trim())) }
 
                 projects.forEach { project ->
                     require(project.name.isNotBlank()) { "Backup memiliki proyek tanpa nama." }
