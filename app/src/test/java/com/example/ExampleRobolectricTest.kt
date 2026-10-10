@@ -346,6 +346,9 @@ class ExampleRobolectricTest {
         assertEquals(1, result.getOrNull())
         assertEquals("Belanja, ATK", db.transactionDao().getTransactionById("TX-CSV-IMPORT-001")?.name)
         assertEquals(1250000.0, db.transactionDao().getTransactionById("TX-CSV-IMPORT-001")?.amount ?: 0.0, 0.01)
+        assertTrue(
+            db.auditDao().getRecentAuditLogs().first().any { it.action == "IMPORT_TRANSACTIONS" }
+        )
 
         val duplicate = repository.importTransactionsFromCsv(csv)
         assertFalse(duplicate.isSuccess)
@@ -459,6 +462,43 @@ class ExampleRobolectricTest {
         } catch (e: IllegalArgumentException) {
             assertTrue(e.message?.contains("sudah dicairkan") == true)
         }
+    }
+
+    @Test
+    fun spreadsheetImportRejectsMalformedMoneyAndTrailingTimestampTextAtomically() = runBlocking {
+        db.accountDao().insertAccount(AccountEntity("csv-strict-account", "Kas CSV Strict", "Kas", 0.0))
+        val headers = listOf(
+            "ID", "Tipe", "Tanggal", "Jam", "Akun", "Ke Akun", "Nama Transaksi", "Kategori",
+            "Keterangan", "Nominal", "Alokasi", "PIC", "Bukti", "No Bukti", "Proyek",
+            "Catatan", "Status", "Waktu Input", "Input Oleh", "Diarsipkan", "Waktu Arsip",
+            "Diarsipkan Oleh", "Kelompok Dana"
+        )
+        fun csvRow(id: String, amount: String, inputTime: String): String {
+            val values = listOf(
+                id, "KELUAR", "2026-10-07", "10:00:00", "Kas CSV Strict", "", "Uji impor",
+                "Operasional", "", amount, "Operasional", "Admin", "", "", "", "", "Selesai",
+                inputTime, "Admin", "TIDAK", "", "", "PT"
+            )
+            return values.joinToString(",") { value ->
+                if (value.any { it == ',' || it == '"' || it == '\n' || it == '\r' }) {
+                    "\"" + value.replace("\"", "\"\"") + "\""
+                } else {
+                    value
+                }
+            }
+        }
+        val csv = "\uFEFF" + headers.joinToString(",") + "\n" +
+            csvRow("TX-BAD-AMOUNT", "12,34,56", "2026-10-07 10:00:00.000") + "\n" +
+            csvRow("TX-BAD-TIMESTAMP", "1000", "2026-10-07 10:00:00.000junk")
+
+        val result = repository.importTransactionsFromCsv(csv)
+
+        assertFalse(result.isSuccess)
+        val error = result.exceptionOrNull()?.message.orEmpty()
+        assertTrue(error.contains("nominal", ignoreCase = true))
+        assertTrue(error.contains("timestamp", ignoreCase = true))
+        assertTrue(db.transactionDao().getAllActiveTransactions().first().isEmpty())
+        assertTrue(db.auditDao().getRecentAuditLogs().first().isEmpty())
     }
 
     @Test
