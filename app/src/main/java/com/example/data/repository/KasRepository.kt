@@ -1757,7 +1757,14 @@ class KasRepository(
 
     suspend fun restoreDataFromJson(jsonStr: String): Result<Int> {
         return try {
+            require(jsonStr.isNotBlank()) { "File backup JSON kosong." }
             val root = JSONObject(jsonStr)
+            require(root.has("accounts") && root.get("accounts") is JSONArray) {
+                "Backup tidak memiliki array accounts yang valid."
+            }
+            require(root.has("transactions") && root.get("transactions") is JSONArray) {
+                "Backup tidak memiliki array transactions yang valid."
+            }
 
             val accounts = mutableListOf<AccountEntity>()
             if (root.has("accounts")) {
@@ -2534,12 +2541,13 @@ class KasRepository(
 
     private fun parseSpreadsheetAmount(raw: String): Double {
         val value = raw.trim()
-            .replace(Regex("""(?i)rp"""), "")
+            .replace(Regex("""(?i)^rp"""), "")
             .replace(Regex("""[\s\u00A0]"""), "")
         require(value.isNotBlank()) { "nominal wajib diisi" }
 
         val negative = value.startsWith("-")
-        val unsigned = value.removePrefix("+").removePrefix("-")
+        val signedInput = value.startsWith("-") || value.startsWith("+")
+        val unsigned = if (signedInput) value.substring(1) else value
         require(unsigned.isNotBlank() && unsigned.all { it.isDigit() || it == '.' || it == ',' }) {
             "format nominal tidak valid: $raw"
         }
