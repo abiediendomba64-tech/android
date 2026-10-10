@@ -2001,7 +2001,7 @@ class KasRepository(
         }
         root.put("housingUnits", housingUnitsArray)
 
-        return root.toString(2)
+        root.toString(2)
     }
 
     suspend fun restoreDataFromJson(jsonStr: String): Result<Int> {
