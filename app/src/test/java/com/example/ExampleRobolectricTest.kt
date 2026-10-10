@@ -2066,4 +2066,37 @@ class ExampleRobolectricTest {
         assertEquals(0.0, balances.single { it.account.id == "acc-b-duplicate" }.totalMasuk, 0.01)
     }
 
+
+    @Test
+    fun projectStatusTransitionsArePersistedAndAudited() = runBlocking {
+        val project = ProjectEntity(
+            id = "PRJ-STATUS-FLOW",
+            name = "Proyek Status Flow",
+            category = "Cut & Fill",
+            businessModel = "Tidak berlaku",
+            location = "Majenang",
+            startDate = "2026-10-01",
+            targetEndDate = "2026-12-31",
+            budgetAmount = 5000000.0,
+            status = "Berjalan",
+            notes = "Regresi lifecycle proyek",
+            isActive = true,
+            createdAt = 1790812800000L
+        )
+        repository.saveProject(project)
+        repository.updateProjectStatus(project.id, "Ditunda")
+        assertEquals("Ditunda", db.projectDao().getProjectById(project.id)?.status)
+        repository.updateProjectStatus(project.id, "Selesai")
+        assertEquals("Selesai", db.projectDao().getProjectById(project.id)?.status)
+        val auditRows = db.auditDao().getRecentAuditLogs().first()
+        assertTrue(auditRows.any { it.recordId == project.id && it.action == "UPDATE_PROJECT_STATUS" })
+
+        try {
+            repository.updateProjectStatus(project.id, "Hapus")
+            throw AssertionError("Status proyek di luar domain harus ditolak.")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message?.contains("Status proyek tidak valid") == true)
+        }
+    }
+
 }

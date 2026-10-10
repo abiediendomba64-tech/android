@@ -188,6 +188,26 @@ fun ProyekScreen(
                             }
                             if (project.location.isNotBlank()) Text("Lokasi: ${project.location}", fontSize = 12.sp)
                             Text("Jadwal: ${project.startDate} s/d ${project.targetEndDate}", fontSize = 11.sp)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                if (project.status != "Berjalan") {
+                                    TextButton(onClick = { viewModel.ubahStatusProyek(project.id, "Berjalan") }) {
+                                        Text(if (project.status == "Selesai") "Buka Kembali" else "Lanjutkan")
+                                    }
+                                }
+                                if (project.status == "Berjalan") {
+                                    TextButton(onClick = { viewModel.ubahStatusProyek(project.id, "Ditunda") }) {
+                                        Text("Tunda")
+                                    }
+                                }
+                                if (project.status != "Selesai") {
+                                    TextButton(onClick = { viewModel.ubahStatusProyek(project.id, "Selesai") }) {
+                                        Text("Tandai Selesai")
+                                    }
+                                }
+                            }
                             HorizontalDivider()
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Column(Modifier.weight(1f)) {

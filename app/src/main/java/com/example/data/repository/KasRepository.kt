@@ -453,6 +453,24 @@ class KasRepository(
     }
 
 
+    suspend fun updateProjectStatus(id: String, status: String) {
+        require(status in setOf("Berjalan", "Ditunda", "Selesai")) { "Status proyek tidak valid." }
+        database.withTransaction {
+            val current = projectDao.getProjectById(id)
+                ?: throw IllegalArgumentException("Proyek $id tidak ditemukan.")
+            if (current.status == status) return@withTransaction
+            projectDao.updateProject(current.copy(status = status))
+            auditDao.insertAuditLog(AuditLogEntity(
+                dateFormatted = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()),
+                action = "UPDATE_PROJECT_STATUS",
+                recordId = current.id,
+                details = "Status proyek ${current.name} berubah dari ${current.status} menjadi $status.",
+                user = "Admin Proyek",
+                verifiedFormulaStatus = "RECORDED"
+            ))
+        }
+    }
+
     suspend fun saveHousingUnit(unit: HousingUnitEntity) {
         require(unit.id.isNotBlank()) { "ID unit wajib diisi." }
         require(unit.project.isNotBlank()) { "Unit harus ditautkan ke proyek perumahan." }

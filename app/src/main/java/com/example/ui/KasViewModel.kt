@@ -722,6 +722,13 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun ubahStatusProyek(id: String, status: String) {
+        launchSafely {
+            repository.updateProjectStatus(id, status)
+            _snackBarMessage.emit("Status proyek diperbarui menjadi $status.")
+        }
+    }
+
     fun tambahRencana(
         project: String,
         date: String,
