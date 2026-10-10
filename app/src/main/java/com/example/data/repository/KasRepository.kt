@@ -883,8 +883,8 @@ class KasRepository(
             var firstId = ""
             allocationsByProject.toSortedMap().forEach { (projectName, amount) ->
                 if (amount > 0.0) {
-                    if (projectName.isNotBlank()) require(projectDao.getProjectByName(projectName)?.isActive == true) {
-                        "Proyek payroll " + projectName + " tidak terdaftar atau nonaktif."
+                    if (projectName.isNotBlank()) require(projectDao.getProjectByName(projectName) != null) {
+                        "Proyek payroll " + projectName + " tidak terdaftar."
                     }
                     val txId = generateId("KK")
                     if (firstId.isBlank()) firstId = txId

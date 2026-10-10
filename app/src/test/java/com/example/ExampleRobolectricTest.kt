@@ -1714,4 +1714,37 @@ class ExampleRobolectricTest {
         )
     }
 
+
+    @Test
+    fun payrollCanBeDisbursedToKnownInactiveProjectToSettleHistoricalWages() = runBlocking {
+        db.accountDao().insertAccount(AccountEntity("acc-pay-inactive-project", "Kas Payroll", "Kas", 1000000.0))
+        val project = ProjectEntity(
+            id = "PRJ-PAYROLL-CLOSED",
+            name = "Proyek Selesai",
+            category = "Perumahan",
+            businessModel = "Komersial",
+            location = "",
+            startDate = "2026-01-01",
+            targetEndDate = "2026-09-30",
+            budgetAmount = 100000000.0,
+            status = "Selesai",
+            notes = "",
+            isActive = false,
+            createdAt = 1790812800000L
+        )
+        db.projectDao().insertProject(project)
+
+        repository.savePayrollDisbursement(
+            period = "2026-10",
+            totalAmount = 250000.0,
+            accountName = "Kas Payroll",
+            allocationsByProject = mapOf(project.name to 250000.0)
+        )
+
+        val payroll = db.transactionDao().getAllActiveTransactions().first().single()
+        assertEquals(project.name, payroll.project)
+        assertEquals("PAYROLL-2026-10", payroll.receiptNo)
+        assertEquals(250000.0, payroll.amount, 0.01)
+    }
+
 }
