@@ -807,7 +807,8 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         accountName: String,
         period: String,
         statementBalance: Double,
-        notes: String
+        notes: String,
+        onSuccess: () -> Unit = {}
     ) {
         launchSafely {
             val id = "REC-${accountName.replace(" ", "_")}-${period}"
@@ -821,11 +822,9 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
                 status = "Belum Diverifikasi",
                 notes = notes
             )
-            repository.saveBankReconciliation(recon)
-            val saved = bankReconciliations.value.firstOrNull { it.id == id }
-            val status = saved?.status ?: "Tersimpan"
-            val diff = saved?.difference ?: 0.0
-            _snackBarMessage.emit("Rekonsiliasi $accountName periode $period disimpan ($status - Selisih: ${formatRupiah(diff)}).")
+            val saved = repository.saveBankReconciliation(recon)
+            _snackBarMessage.emit("Rekonsiliasi ${saved.accountName} periode ${saved.period} disimpan (${saved.status} - Selisih: ${formatRupiah(saved.difference)}).")
+            onSuccess()
         }
     }
 

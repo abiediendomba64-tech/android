@@ -13,7 +13,7 @@ interface BankReconDao {
     @Query("SELECT * FROM bank_reconciliations ORDER BY reconciledAt DESC")
     fun getAllReconciliations(): Flow<List<BankReconEntity>>
 
-    @Query("SELECT * FROM bank_reconciliations WHERE accountName = :accountName AND period = :period LIMIT 1")
+    @Query("SELECT * FROM bank_reconciliations WHERE LOWER(TRIM(accountName)) = LOWER(TRIM(:accountName)) AND period = :period ORDER BY reconciledAt DESC LIMIT 1")
     suspend fun getReconByAccountAndPeriod(accountName: String, period: String): BankReconEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)

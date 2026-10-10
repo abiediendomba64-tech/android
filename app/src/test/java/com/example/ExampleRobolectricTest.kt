@@ -1747,4 +1747,38 @@ class ExampleRobolectricTest {
         assertEquals(250000.0, payroll.amount, 0.01)
     }
 
+
+    @Test
+    fun bankReconciliationUpsertsByAccountAndMonthInsteadOfCreatingDuplicates() = runBlocking {
+        db.accountDao().insertAccount(AccountEntity("acc-recon-upsert", "Bank Rekonsiliasi", "Bank", 100000.0))
+        repository.saveBankReconciliation(
+            BankReconEntity(
+                id = "REC-FIRST",
+                accountName = "Bank Rekonsiliasi",
+                period = "2026-10",
+                bookBalance = 0.0,
+                statementBalance = 120000.0,
+                difference = 0.0
+            )
+        )
+        repository.saveBankReconciliation(
+            BankReconEntity(
+                id = "REC-SECOND",
+                accountName = " bank rekonsiliasi ",
+                period = "2026-10",
+                bookBalance = 0.0,
+                statementBalance = 90000.0,
+                difference = 0.0
+            )
+        )
+        val rows = db.bankReconDao().getAllReconciliations().first()
+        assertEquals(1, rows.size)
+        assertEquals("REC-FIRST", rows.single().id)
+        assertEquals("Bank Rekonsiliasi", rows.single().accountName)
+        assertEquals(100000.0, rows.single().bookBalance, 0.01)
+        assertEquals(90000.0, rows.single().statementBalance, 0.01)
+        assertEquals(-10000.0, rows.single().difference, 0.01)
+        assertEquals("Selisih", rows.single().status)
+    }
+
 }

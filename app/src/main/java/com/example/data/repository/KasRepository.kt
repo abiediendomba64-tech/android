@@ -916,33 +916,42 @@ class KasRepository(
 
 
     // Bank Reconciliation Operations
-    suspend fun saveBankReconciliation(recon: BankReconEntity) {
+    suspend fun saveBankReconciliation(recon: BankReconEntity): BankReconEntity {
+        require(recon.id.isNotBlank()) { "ID rekonsiliasi wajib diisi." }
         require(recon.statementBalance.isFinite() && recon.statementBalance >= 0.0) { "Saldo rekening koran tidak valid." }
         require(recon.period.matches(Regex("""\d{4}-\d{2}"""))) { "Periode rekonsiliasi harus YYYY-MM." }
-        val account = accountDao.getAccountByName(recon.accountName)
-            ?: throw IllegalArgumentException("Akun rekonsiliasi ${recon.accountName} tidak terdaftar.")
-        require(account.isActive) { "Akun rekonsiliasi ${account.name} nonaktif." }
-        val bookBalance = account.initialBalance +
-            transactionDao.sumSettledAccountMovementUntilDate(account.name, periodEndDate(recon.period))
-        val difference = recon.statementBalance - bookBalance
-        val normalized = recon.copy(
-            accountName = account.name,
-            bookBalance = bookBalance,
-            difference = difference,
-            status = if (kotlin.math.abs(difference) < 1.0) "Cocok" else "Selisih"
-        )
-        bankReconDao.insertReconciliation(normalized)
-        val nowStamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-        auditDao.insertAuditLog(
-            AuditLogEntity(
-                dateFormatted = nowStamp,
-                action = "BANK_RECONCILE",
-                recordId = normalized.id,
-                details = "Rekonsiliasi ${normalized.accountName} periode ${normalized.period}: Buku Rp ${normalized.bookBalance.toLong()} vs Bank Rp ${normalized.statementBalance.toLong()} (Selisih: Rp ${normalized.difference.toLong()} - ${normalized.status})",
-                user = normalized.reconciledBy,
-                verifiedFormulaStatus = "RECORDED"
+        requireIsoDate("${recon.period}-01", "Periode rekonsiliasi")
+        require(recon.reconciledBy.isNotBlank()) { "PIC rekonsiliasi wajib diisi." }
+        return database.withTransaction {
+            val account = accountDao.getAccountByName(recon.accountName)
+                ?: throw IllegalArgumentException("Akun rekonsiliasi ${recon.accountName} tidak terdaftar.")
+            require(account.isActive) { "Akun rekonsiliasi ${account.name} nonaktif." }
+            val existing = bankReconDao.getReconByAccountAndPeriod(account.name, recon.period)
+            val bookBalance = account.initialBalance +
+                transactionDao.sumSettledAccountMovementUntilDate(account.name, periodEndDate(recon.period))
+            val difference = recon.statementBalance - bookBalance
+            val normalized = recon.copy(
+                id = existing?.id ?: recon.id,
+                accountName = account.name,
+                bookBalance = bookBalance,
+                difference = difference,
+                status = if (kotlin.math.abs(difference) < 1.0) "Cocok" else "Selisih",
+                reconciledAt = System.currentTimeMillis()
             )
-        )
+            bankReconDao.insertReconciliation(normalized)
+            val nowStamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+            auditDao.insertAuditLog(
+                AuditLogEntity(
+                    dateFormatted = nowStamp,
+                    action = if (existing == null) "BANK_RECONCILE" else "BANK_RECONCILE_UPDATE",
+                    recordId = normalized.id,
+                    details = "Rekonsiliasi ${normalized.accountName} periode ${normalized.period}: Buku Rp ${normalized.bookBalance.toLong()} vs Bank Rp ${normalized.statementBalance.toLong()} (Selisih: Rp ${normalized.difference.toLong()} - ${normalized.status})",
+                    user = normalized.reconciledBy,
+                    verifiedFormulaStatus = "RECORDED"
+                )
+            )
+            normalized
+        }
     }
 
 

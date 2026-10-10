@@ -249,16 +249,22 @@ fun RekonsiliasiArusKasScreen(
                     ) {
                         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                OutlinedTextField(
+                                IsoDatePickerField(
                                     value = startDate,
-                                    onValueChange = { startDate = it },
-                                    label = { Text("Tgl Mulai") },
+                                    label = "Tanggal Mulai",
+                                    onDateSelected = { picked ->
+                                        startDate = picked
+                                        if (picked > endDate) endDate = picked
+                                    },
                                     modifier = Modifier.weight(1f)
                                 )
-                                OutlinedTextField(
+                                IsoDatePickerField(
                                     value = endDate,
-                                    onValueChange = { endDate = it },
-                                    label = { Text("Tgl Akhir") },
+                                    label = "Tanggal Akhir",
+                                    onDateSelected = { picked ->
+                                        endDate = picked
+                                        if (picked < startDate) startDate = picked
+                                    },
                                     modifier = Modifier.weight(1f)
                                 )
                             }
@@ -421,10 +427,17 @@ fun RekonsiliasiArusKasScreen(
                             Button(
                                 onClick = {
                                     val stAmt = statementBalanceInput.toDoubleOrNull()
-                                    if (stAmt != null) {
-                                        viewModel.simpanRekonsiliasiBank(reconAccountName, reconPeriod, stAmt, reconNotes)
-                                        statementBalanceInput = ""
-                                        reconNotes = ""
+                                    if (stAmt != null && stAmt.isFinite() && stAmt >= 0.0 && reconAccountName.isNotBlank()) {
+                                        viewModel.simpanRekonsiliasiBank(
+                                            accountName = reconAccountName,
+                                            period = reconPeriod,
+                                            statementBalance = stAmt,
+                                            notes = reconNotes,
+                                            onSuccess = {
+                                                statementBalanceInput = ""
+                                                reconNotes = ""
+                                            }
+                                        )
                                     }
                                 },
                                 modifier = Modifier.fillMaxWidth(),
