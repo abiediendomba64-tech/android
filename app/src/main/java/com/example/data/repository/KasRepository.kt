@@ -1440,7 +1440,7 @@ class KasRepository(
         )
     }
 
-    suspend fun runCurrentIntegrityAudit(): IntegrityAuditSnapshot {
+    suspend fun runCurrentIntegrityAudit(): IntegrityAuditSnapshot = database.withTransaction {
         val accountsSnapshot = accountDao.getAllAccounts().first()
         val transactionsSnapshot = (
             transactionDao.getAllActiveTransactions().first() +
@@ -1455,6 +1455,7 @@ class KasRepository(
         val housingUnitsSnapshot = housingUnitDao.getAllUnits().first()
         val notesSnapshot = noteDao.getAllNotes().first()
         val reconciliationsSnapshot = bankReconDao.getAllReconciliations().first()
+        val auditLogsSnapshot = auditDao.getAllAuditLogs()
 
         val result = runIntegrityAudit(
             accounts = accountsSnapshot,
@@ -1467,10 +1468,11 @@ class KasRepository(
             projectPlans = projectPlansSnapshot,
             housingUnits = housingUnitsSnapshot,
             notes = notesSnapshot,
-            bankReconciliations = reconciliationsSnapshot
+            bankReconciliations = reconciliationsSnapshot,
+            auditLogs = auditLogsSnapshot
         )
         val totalBalance = calculateAccountBalances(accountsSnapshot, transactionsSnapshot).sumOf { it.currentBalance }
-        return IntegrityAuditSnapshot(result, totalBalance, transactionsSnapshot.size)
+        IntegrityAuditSnapshot(result, totalBalance, transactionsSnapshot.size)
     }
 
     fun runIntegrityAudit(
@@ -1484,7 +1486,8 @@ class KasRepository(
         projectPlans: List<ProjectPlanEntity> = emptyList(),
         housingUnits: List<HousingUnitEntity> = emptyList(),
         notes: List<CashNoteEntity> = emptyList(),
-        bankReconciliations: List<BankReconEntity> = emptyList()
+        bankReconciliations: List<BankReconEntity> = emptyList(),
+        auditLogs: List<AuditLogEntity> = emptyList()
     ): IntegrityAuditResult {
         val issues = mutableListOf<String>()
         val checkedAt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
@@ -1511,6 +1514,16 @@ class KasRepository(
             issues += "Nama proyek duplikat; hubungan transaksi, unit, anggaran, dan kalender ambigu."
         }
         if (accounts.map { it.id }.distinct().size != accounts.size) issues += "ID akun duplikat dalam snapshot."
+        if (auditLogs.map { it.id }.distinct().size != auditLogs.size) issues += "ID audit log duplikat dalam snapshot."
+        auditLogs.forEach { audit ->
+            if (audit.id <= 0L) issues += "Audit log tanpa ID valid ditemukan."
+            if (audit.timestamp <= 0L) issues += "Audit log ${audit.id}: timestamp tidak valid."
+            if (audit.dateFormatted.isBlank() || audit.action.isBlank() || audit.recordId.isBlank() ||
+                audit.user.isBlank() || audit.verifiedFormulaStatus.isBlank()) {
+                issues += "Audit log ${audit.id}: metadata wajib tidak lengkap."
+            }
+            if (!audit.balanceAfter.isFinite()) issues += "Audit log ${audit.id}: balanceAfter tidak valid."
+        }
         if (budgets.filter { it.id != 0L }.map { it.id }.distinct().size != budgets.count { it.id != 0L }) issues += "ID anggaran duplikat dalam snapshot."
         if (notes.filter { it.id != 0L }.map { it.id }.distinct().size != notes.count { it.id != 0L }) issues += "ID catatan duplikat dalam snapshot."
         if (projectRows.map { it.id }.distinct().size != projectRows.size) issues += "ID proyek duplikat dalam snapshot."
@@ -2329,6 +2342,13 @@ class KasRepository(
                 require(attendances.none { it.id in existingAttendanceIds }) { "Backup memiliki ID absensi yang sudah ada di database." }
                 require(recons.map { it.id }.distinct().size == recons.size) { "Backup memiliki ID rekonsiliasi duplikat." }
                 require(recons.none { it.id in existingReconIds }) { "Backup memiliki ID rekonsiliasi yang sudah ada di database." }
+                require(audits.map { it.id }.distinct().size == audits.size) { "Backup memiliki ID audit log duplikat." }
+                require(audits.all { it.id > 0L }) { "Backup memiliki ID audit log kosong/tidak valid." }
+                require(audits.all {
+                    it.timestamp > 0L && it.dateFormatted.isNotBlank() && it.action.isNotBlank() &&
+                        it.recordId.isNotBlank() && it.user.isNotBlank() &&
+                        it.verifiedFormulaStatus.isNotBlank() && it.balanceAfter.isFinite()
+                }) { "Audit log backup tidak valid: ID/timestamp/metadata wajib/balanceAfter." }
                 require(budgets.filter { it.id != 0L }.map { it.id }.distinct().size == budgets.count { it.id != 0L }) {
                     "Backup memiliki ID anggaran duplikat."
                 }

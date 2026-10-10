@@ -2372,6 +2372,62 @@ class ExampleRobolectricTest {
     }
 
     @Test
+    fun integrityAuditInspectsAllAuditLogsForRequiredMetadataAndNumericValues() = runBlocking {
+        db.auditDao().insertAuditLog(
+            AuditLogEntity(
+                timestamp = 0L,
+                dateFormatted = "",
+                action = "",
+                recordId = "",
+                details = "",
+                user = "",
+                verifiedFormulaStatus = "",
+                balanceAfter = Double.NaN
+            )
+        )
+
+        val result = repository.runCurrentIntegrityAudit().result
+        assertFalse(result.passed)
+        assertTrue(result.issues.any { it.contains("Audit log") && it.contains("metadata wajib tidak lengkap") })
+        assertTrue(result.issues.any { it.contains("Audit log") && it.contains("timestamp tidak valid") })
+        assertTrue(result.issues.any { it.contains("Audit log") && it.contains("balanceAfter tidak valid") })
+    }
+
+    @Test
+    fun restoreRejectsInvalidAuditLogBeforeAnyDatabaseWrite() = runBlocking {
+        val backup = """
+            {
+              "accounts": [{
+                "id": "restore-audit-account",
+                "name": "Kas Restore Audit",
+                "type": "Kas",
+                "initialBalance": 0,
+                "colorHex": "#1E56A0",
+                "isActive": true
+              }],
+              "transactions": [],
+              "auditLogs": [{
+                "id": 1,
+                "timestamp": 0,
+                "dateFormatted": "",
+                "action": "",
+                "recordId": "",
+                "details": "",
+                "user": "",
+                "verifiedFormulaStatus": "",
+                "balanceAfter": 0
+              }]
+            }
+        """.trimIndent()
+
+        val result = repository.restoreDataFromJson(backup)
+        assertFalse(result.isSuccess)
+        assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("Audit log backup tidak valid"))
+        assertTrue(db.accountDao().getAllAccounts().first().isEmpty())
+        assertNull(db.accountDao().getAccountById("restore-audit-account"))
+    }
+
+    @Test
     fun integrityAuditDetectsReceivableStatusNotMatchingPaymentAmount() = runBlocking {
         db.accountDao().insertAccount(AccountEntity("acc-receivable-status", "Kas Status Tagihan", "Kas", 0.0))
         db.receivableDao().insertReceivable(
