@@ -1,6 +1,6 @@
 package com.example
 
-import androidx.compose.ui.test.assertExists
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -27,28 +27,28 @@ class ExampleInstrumentedTest {
     fun navigationOpensReportsAndPeriodDateControls() {
         composeRule.onNodeWithTag("nav_drawer_toggle").performClick()
         composeRule.onNodeWithText("Laporan Keuangan").performClick()
-        composeRule.onNodeWithTag("laporan_screen").assertExists()
-        composeRule.onNodeWithText("Tanggal Mulai").assertExists()
-        composeRule.onNodeWithText("Tanggal Akhir").assertExists()
+        composeRule.onNodeWithTag("laporan_screen").assertIsDisplayed()
+        composeRule.onNodeWithText("Tanggal Mulai").assertIsDisplayed()
+        composeRule.onNodeWithText("Tanggal Akhir").assertIsDisplayed()
     }
 
     @Test
     fun attendanceFormOpensWithDatePickerField() {
         composeRule.onNodeWithTag("nav_drawer_toggle").performClick()
         composeRule.onNodeWithText("Absensi Karyawan").performClick()
-        composeRule.onNodeWithTag("absensi_screen").assertExists()
+        composeRule.onNodeWithTag("absensi_screen").assertIsDisplayed()
         composeRule.onNodeWithTag("fab_record_attendance").performClick()
-        composeRule.onNodeWithTag("attendance_date_input").assertExists()
+        composeRule.onNodeWithTag("attendance_date_input").assertIsDisplayed()
     }
 
     @Test
     fun backupScreenExposesRealFileImportAndExportControls() {
         composeRule.onNodeWithTag("nav_drawer_toggle").performClick()
         composeRule.onNodeWithText("Cadangan & Pulihkan").performClick()
-        composeRule.onNodeWithTag("backup_restore_screen").assertExists()
-        composeRule.onNodeWithText("Simpan Backup JSON").assertExists()
-        composeRule.onNodeWithText("Pulihkan dari File Backup").assertExists()
-        composeRule.onNodeWithTag("spreadsheet_export").assertExists()
-        composeRule.onNodeWithTag("spreadsheet_import").assertExists()
+        composeRule.onNodeWithTag("backup_restore_screen").assertIsDisplayed()
+        composeRule.onNodeWithText("Simpan Backup JSON").assertIsDisplayed()
+        composeRule.onNodeWithText("Pulihkan dari File Backup").assertIsDisplayed()
+        composeRule.onNodeWithTag("spreadsheet_export").assertIsDisplayed()
+        composeRule.onNodeWithTag("spreadsheet_import").assertIsDisplayed()
     }
 }
