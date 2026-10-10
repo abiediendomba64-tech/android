@@ -1998,4 +1998,43 @@ class ExampleRobolectricTest {
         assertTrue(db.transactionDao().getAllActiveTransactions().first().isEmpty())
     }
 
+
+    @Test
+    fun manualTransactionsCannotForgePayrollOrReceivablePaymentReceiptReferences() = runBlocking {
+        db.accountDao().insertAccount(AccountEntity("acc-reserved-receipt", "Kas Reservasi", "Kas", 100000.0))
+        val fakePayroll = TransactionEntity(
+            id = "TX-MANUAL-FAKE-PAYROLL",
+            type = "KELUAR",
+            date = "2026-10-11",
+            time = "10:00:00",
+            account = "Kas Reservasi",
+            name = "Gaji manual palsu",
+            category = "Gaji",
+            description = "Harus melalui tombol pencairan payroll",
+            amount = 100000.0,
+            receiptNo = "PAYROLL-2026-10"
+        )
+        try {
+            repository.saveTransaction(fakePayroll)
+            throw AssertionError("Transaksi manual tidak boleh membuat bukti payroll sistem.")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message?.contains("hanya dibuat melalui alur") == true)
+        }
+
+        val fakeReceivable = fakePayroll.copy(
+            id = "TX-MANUAL-FAKE-PIUTANG",
+            type = "MASUK",
+            name = "Pelunasan piutang manual",
+            category = "Piutang Masuk",
+            receiptNo = "PIU-PIU-NOT-REAL"
+        )
+        try {
+            repository.saveTransaction(fakeReceivable)
+            throw AssertionError("Transaksi manual tidak boleh membuat bukti pembayaran piutang sistem.")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message?.contains("hanya dibuat melalui alur") == true)
+        }
+        assertTrue(db.transactionDao().getAllActiveTransactions().first().isEmpty())
+    }
+
 }

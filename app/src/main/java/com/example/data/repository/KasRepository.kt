@@ -160,8 +160,11 @@ class KasRepository(
         }
     }
 
-    private suspend fun insertValidatedTransaction(transaction: TransactionEntity) {
-        validateTransaction(transaction)
+    private suspend fun insertValidatedTransaction(
+        transaction: TransactionEntity,
+        allowSystemReceiptNo: Boolean = false
+    ) {
+        validateTransaction(transaction, allowSystemReceiptNo = allowSystemReceiptNo)
         transactionDao.insertTransaction(transaction)
         val postBalance = accountDao.getAccountByName(transaction.account)?.let { account ->
             account.initialBalance + transactionDao.sumSettledAccountMovement(account.name)
@@ -203,9 +206,20 @@ class KasRepository(
     private suspend fun validateTransaction(
         transaction: TransactionEntity,
         allowInactiveAccountReferences: Boolean = false,
-        allowLegacyTransferIncome: Boolean = false
+        allowLegacyTransferIncome: Boolean = false,
+        allowSystemReceiptNo: Boolean = false
     ) {
         require(transaction.id.isNotBlank()) { "ID transaksi wajib diisi." }
+        val normalizedReceiptNo = transaction.receiptNo.trim()
+        if (!allowSystemReceiptNo) {
+            require(
+                !normalizedReceiptNo.startsWith("PAYROLL-", ignoreCase = true) &&
+                    !normalizedReceiptNo.startsWith("PIU-", ignoreCase = true) &&
+                    !normalizedReceiptNo.startsWith("HUT-", ignoreCase = true)
+            ) {
+                "Nomor bukti PAYROLL-, PIU-, dan HUT- hanya dibuat melalui alur payroll/pembayaran tagihan, bukan transaksi manual."
+            }
+        }
         requireIsoDate(transaction.date, "Tanggal transaksi")
         requireIsoTime(transaction.time, "Jam transaksi")
         require(transaction.name.isNotBlank()) { "Nama transaksi wajib diisi." }
@@ -616,7 +630,7 @@ class KasRepository(
                 fundBucket = current.fundBucket,
                 status = "Selesai"
             )
-            insertValidatedTransaction(tx)
+            insertValidatedTransaction(tx, allowSystemReceiptNo = true)
         }
     }
 
@@ -649,7 +663,7 @@ class KasRepository(
                 fundBucket = current.fundBucket,
                 status = "Selesai"
             )
-            insertValidatedTransaction(tx)
+            insertValidatedTransaction(tx, allowSystemReceiptNo = true)
         }
     }
 
@@ -923,7 +937,7 @@ class KasRepository(
                         project = projectName,
                         fundBucket = "PT"
                     )
-                    insertValidatedTransaction(tx)
+                    insertValidatedTransaction(tx, allowSystemReceiptNo = true)
                 }
             }
             require(firstId.isNotBlank()) { "Tidak ada nilai payroll positif untuk dicairkan." }
@@ -2083,7 +2097,12 @@ class KasRepository(
                 if (attendances.isNotEmpty()) attendanceDao.insertAttendances(attendances)
 
                 transactions.forEach { tx ->
-                    validateTransaction(tx, allowInactiveAccountReferences = true, allowLegacyTransferIncome = true)
+                    validateTransaction(
+                        tx,
+                        allowInactiveAccountReferences = true,
+                        allowLegacyTransferIncome = true,
+                        allowSystemReceiptNo = true
+                    )
                     require(tx.date.matches(Regex("""\d{4}-\d{2}-\d{2}"""))) { "Tanggal transaksi ${tx.id} tidak valid." }
                     require(tx.time.matches(Regex("""\d{2}:\d{2}:\d{2}"""))) { "Jam transaksi ${tx.id} tidak valid." }
                     require(tx.name.isNotBlank() && tx.category.isNotBlank()) { "Transaksi " + tx.id + " tidak lengkap." }
@@ -2295,8 +2314,19 @@ class KasRepository(
                         project=project, note=note, status=status, inputTime=inputTime, inputBy=inputBy,
                         isArchived=isArchived, archivedAt=archivedAt, archivedBy=archivedBy, fundBucket=fundBucket
                     )
-                    validateTransaction(tx, allowInactiveAccountReferences = true)
+                    validateTransaction(
+                        tx,
+                        allowInactiveAccountReferences = true,
+                        allowSystemReceiptNo = true
+                    )
                     when {
+                        receiptNo.startsWith("PAYROLL-", ignoreCase = true) -> {
+                            require(type == "KELUAR" && category.equals("Gaji", ignoreCase = true) && status == "Selesai") {
+                                "Baris payroll harus bertipe KELUAR, kategori Gaji, dan status Selesai."
+                            }
+                            val payrollPeriod = receiptNo.substring("PAYROLL-".length)
+                            payrollPeriodRange(payrollPeriod)
+                        }
                         receiptNo.startsWith("PIU-", ignoreCase = true) -> {
                             require(type == "MASUK" && category.equals("Piutang Masuk", ignoreCase = true) && status == "Selesai") {
                                 "Baris pembayaran PIUTANG harus bertipe MASUK, kategori Piutang Masuk, dan status Selesai."
