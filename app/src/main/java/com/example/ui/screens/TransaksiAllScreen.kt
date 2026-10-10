@@ -36,6 +36,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -53,6 +54,7 @@ import com.example.ui.components.formatRupiah
 import com.example.ui.theme.ExpenseRed
 import com.example.ui.theme.IncomeGreen
 import com.example.ui.theme.PrimaryNavy
+import kotlinx.coroutines.launch
 
 @Composable
 fun TransaksiAllScreen(
@@ -60,6 +62,7 @@ fun TransaksiAllScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val transactions by viewModel.activeTransactions.collectAsStateWithLifecycle()
     val accounts by viewModel.accounts.collectAsStateWithLifecycle()
 
@@ -126,13 +129,15 @@ fun TransaksiAllScreen(
                         )
                         IconButton(
                             onClick = {
-                                val csv = viewModel.exportCsv()
-                                val sendIntent = Intent().apply {
-                                    action = Intent.ACTION_SEND
-                                    putExtra(Intent.EXTRA_TEXT, csv)
-                                    type = "text/csv"
+                                scope.launch {
+                                    val csv = viewModel.exportCsv()
+                                    val sendIntent = Intent().apply {
+                                        action = Intent.ACTION_SEND
+                                        putExtra(Intent.EXTRA_TEXT, csv)
+                                        type = "text/csv"
+                                    }
+                                    context.startActivity(Intent.createChooser(sendIntent, "Ekspor CSV Transaksi"))
                                 }
-                                context.startActivity(Intent.createChooser(sendIntent, "Ekspor CSV Transaksi"))
                             },
                             modifier = Modifier.size(36.dp)
                         ) {
