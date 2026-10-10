@@ -22,6 +22,9 @@ interface AccountDao {
     @Query("SELECT * FROM accounts WHERE LOWER(TRIM(name)) = LOWER(TRIM(:name)) LIMIT 1")
     suspend fun getAccountByName(name: String): AccountEntity?
 
+    @Query("SELECT COUNT(*) FROM accounts WHERE LOWER(TRIM(name)) = LOWER(TRIM(:name))")
+    suspend fun countByName(name: String): Int
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAccount(account: AccountEntity)
 

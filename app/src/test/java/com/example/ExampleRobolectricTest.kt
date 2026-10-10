@@ -1959,4 +1959,43 @@ class ExampleRobolectricTest {
         assertEquals(1, db.transactionDao().getAllActiveTransactions().first().size)
     }
 
+
+    @Test
+    fun accountCreationIsAtomicAndIntegrityAuditFlagsLegacyDuplicateNames() = runBlocking {
+        repository.saveAccount(AccountEntity("acc-name-unique-1", "Bank Kas", "Bank", 100000.0))
+        try {
+            repository.saveAccount(AccountEntity("acc-name-unique-2", " bank KAS ", "Kas", 0.0))
+            throw AssertionError("Nama akun duplikat harus ditolak tanpa membedakan kapital/spasi.")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message?.contains("Nama akun sudah digunakan") == true)
+        }
+        assertEquals(1, db.accountDao().getAllAccounts().first().size)
+
+        // Model a pre-existing/legacy duplicate inserted outside repository validation.
+        db.accountDao().insertAccount(AccountEntity("acc-name-legacy-duplicate", "BANK KAS", "Bank", 20000.0))
+        val audit = repository.runCurrentIntegrityAudit()
+        assertFalse(audit.result.passed)
+        assertTrue(audit.result.issues.any { it.contains("Nama akun duplikat") })
+        try {
+            repository.saveTransaction(
+                TransactionEntity(
+                    id = "TX-AMBIGUOUS-ACCOUNT",
+                    type = "MASUK",
+                    date = "2026-10-11",
+                    time = "10:00:00",
+                    account = "Bank Kas",
+                    name = "Akun ambigu",
+                    category = "Penjualan",
+                    description = "",
+                    amount = 1000.0,
+                    status = "Selesai"
+                )
+            )
+            throw AssertionError("Transaksi baru harus diblokir bila nama akun memiliki identitas ganda.")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message?.contains("duplikat") == true)
+        }
+        assertTrue(db.transactionDao().getAllActiveTransactions().first().isEmpty())
+    }
+
 }

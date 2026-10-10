@@ -221,9 +221,14 @@ class KasRepository(
             "Transfer antar akun harus dicatat melalui menu Transfer agar tidak dihitung sebagai pendapatan."
         }
         require(transaction.status in setOf("Selesai", "Draft", "Pending", "Batal", "Dihapus")) { "Status transaksi tidak valid." }
+        val sourceAccountCount = accountDao.countByName(transaction.account)
+        require(sourceAccountCount == 1) {
+            if (sourceAccountCount == 0) "Akun ${transaction.account} tidak terdaftar."
+            else "Nama akun ${transaction.account} duplikat; rapikan master akun sebelum transaksi baru."
+        }
         val sourceAccount = accountDao.getAccountByName(transaction.account)
         require(sourceAccount != null && (sourceAccount.isActive || allowInactiveAccountReferences)) {
-            "Akun " + transaction.account + " tidak terdaftar atau nonaktif."
+            "Akun " + transaction.account + " nonaktif."
         }
         if (transaction.project.isNotBlank()) {
             require(projectDao.getProjectByName(transaction.project) != null) {
@@ -244,9 +249,14 @@ class KasRepository(
             require(!destination.equals(transaction.account, ignoreCase = true)) {
                 "Akun asal dan tujuan transfer tidak boleh sama."
             }
+            val destinationAccountCount = accountDao.countByName(destination)
+            require(destinationAccountCount == 1) {
+                if (destinationAccountCount == 0) "Akun tujuan ${destination} tidak terdaftar."
+                else "Nama akun tujuan ${destination} duplikat; rapikan master akun sebelum transfer."
+            }
             val destinationAccount = accountDao.getAccountByName(destination)
             require(destinationAccount != null && (destinationAccount.isActive || allowInactiveAccountReferences)) {
-                "Akun tujuan " + destination + " tidak terdaftar atau nonaktif."
+                "Akun tujuan " + destination + " nonaktif."
             }
         } else {
             require(transaction.toAccount == null) {
@@ -305,13 +315,25 @@ class KasRepository(
         error("Pengosongan arsip permanen dinonaktifkan untuk menjaga histori ledger.")
 
     suspend fun saveAccount(account: AccountEntity) {
+        require(account.id.isNotBlank()) { "ID akun wajib diisi." }
         require(account.name.isNotBlank()) { "Nama akun wajib diisi." }
         require(account.type in setOf("Kas", "Bank", "E-Wallet", "Lainnya")) { "Jenis akun tidak valid." }
         require(account.initialBalance.isFinite() && account.initialBalance >= 0.0) { "Saldo awal akun tidak valid." }
-        require(accountDao.getAccountById(account.id) == null) { "ID akun " + account.id + " sudah digunakan." }
-        val existing = accountDao.getAccountByName(account.name.trim())
-        require(existing == null) { "Nama akun sudah digunakan." }
-        accountDao.insertAccount(account.copy(name = account.name.trim()))
+        database.withTransaction {
+            require(accountDao.getAccountById(account.id) == null) { "ID akun " + account.id + " sudah digunakan." }
+            require(accountDao.countByName(account.name.trim()) == 0) { "Nama akun sudah digunakan (tidak peka huruf besar/kecil)." }
+            val saved = account.copy(name = account.name.trim())
+            accountDao.insertAccount(saved)
+            auditDao.insertAuditLog(AuditLogEntity(
+                dateFormatted = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()),
+                action = "CREATE_ACCOUNT",
+                recordId = saved.id,
+                details = "Akun ${saved.name} dibuat dengan saldo awal Rp ${saved.initialBalance.toLong()} dan jenis ${saved.type}.",
+                user = "Admin",
+                verifiedFormulaStatus = "RECORDED",
+                balanceAfter = saved.initialBalance
+            ))
+        }
     }
 
     suspend fun bulkMarkAllEmployeesHadir(date: String) {
@@ -553,7 +575,10 @@ class KasRepository(
         require(receivable.status in setOf("Belum Jatuh Tempo", "Jatuh Tempo")) {
             "Tagihan baru tidak dapat langsung berstatus Lunas. Catat pembayaran melalui menu Pembayaran Tagihan."
         }
-        require(accountDao.getAccountByName(receivable.targetAccount)?.isActive == true) { "Akun terkait tidak terdaftar atau nonaktif." }
+        require(accountDao.countByName(receivable.targetAccount) == 1) {
+            "Nama akun ${receivable.targetAccount} tidak unik; rapikan master akun terlebih dahulu."
+        }
+        require(accountDao.getAccountByName(receivable.targetAccount)?.isActive == true) { "Akun terkait nonaktif." }
         require(receivable.fundBucket in setOf("PT", "Perdagangan", "Dana Talang", "Pribadi", "Darurat")) { "Kelompok dana tagihan tidak valid." }
         if (receivable.project.isNotBlank()) require(projectDao.getProjectByName(receivable.project)?.isActive == true) {
             "Proyek tagihan tidak terdaftar atau nonaktif."
@@ -915,6 +940,9 @@ class KasRepository(
         requireIsoDate("${recon.period}-01", "Periode rekonsiliasi")
         require(recon.reconciledBy.isNotBlank()) { "PIC rekonsiliasi wajib diisi." }
         return database.withTransaction {
+            require(accountDao.countByName(recon.accountName) == 1) {
+                "Nama akun rekonsiliasi ${recon.accountName} tidak unik; rapikan master akun terlebih dahulu."
+            }
             val account = accountDao.getAccountByName(recon.accountName)
                 ?: throw IllegalArgumentException("Akun rekonsiliasi ${recon.accountName} tidak terdaftar.")
             require(account.isActive) { "Akun rekonsiliasi ${account.name} nonaktif." }
@@ -1356,7 +1384,19 @@ class KasRepository(
     ): IntegrityAuditResult {
         val issues = mutableListOf<String>()
         val checkedAt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-        val accountNames = accounts.map { it.name.trim().lowercase(Locale.getDefault()) }.toSet()
+        val duplicateAccountNames = accounts
+            .filter { it.name.isNotBlank() }
+            .groupBy { it.name.trim().lowercase(Locale.ROOT) }
+            .filterValues { it.size > 1 }
+        duplicateAccountNames.values.forEach { duplicates ->
+            issues += "Nama akun duplikat: ${duplicates.joinToString(" / ") { it.name }}. Saldo/transaksi berbasis nama tidak dapat dipastikan sampai master akun dirapikan."
+        }
+        accounts.forEach { account ->
+            if (account.name.isBlank()) issues += "Akun ${account.id}: nama kosong."
+            if (!account.initialBalance.isFinite() || account.initialBalance < 0.0) issues += "Akun ${account.id}: saldo awal tidak valid."
+            if (account.type !in setOf("Kas", "Bank", "E-Wallet", "Lainnya")) issues += "Akun ${account.id}: jenis tidak valid."
+        }
+        val accountNames = accounts.map { it.name.trim().lowercase(Locale.ROOT) }.toSet()
         val employeeIds = employees.map { it.id }.toSet()
         val validTypes = setOf("MASUK", "KELUAR", "TRANSFER")
         val validStatuses = setOf("Selesai", "Draft", "Pending", "Batal", "Dihapus")
