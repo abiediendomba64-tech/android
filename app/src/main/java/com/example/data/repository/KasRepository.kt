@@ -106,6 +106,12 @@ data class IntegrityAuditResult(
     val checkedAt: String
 )
 
+data class IntegrityAuditSnapshot(
+    val result: IntegrityAuditResult,
+    val totalBalance: Double,
+    val transactionCount: Int
+)
+
 class KasRepository(
     private val database: AppDatabase,
     private val transactionDao: TransactionDao,
@@ -620,6 +626,13 @@ class KasRepository(
             val actualOld = transactionDao.getTransactionById(newTx.id)
                 ?: throw IllegalArgumentException("Transaksi ${newTx.id} tidak ditemukan.")
             require(oldTx.id == actualOld.id) { "ID transaksi lama dan baru tidak cocok." }
+            require(
+                !actualOld.receiptNo.startsWith("PAYROLL-", ignoreCase = true) &&
+                    !actualOld.receiptNo.startsWith("PIU-", ignoreCase = true) &&
+                    !actualOld.receiptNo.startsWith("HUT-", ignoreCase = true)
+            ) {
+                "Transaksi payroll atau pembayaran tagihan terikat ke histori terkait dan tidak dapat diedit. Catat koreksi melalui transaksi penyesuaian."
+            }
             validateTransaction(newTx)
             transactionDao.updateTransaction(newTx)
             val postBalance = accountDao.getAccountByName(newTx.account)?.let { account ->
@@ -1259,13 +1272,39 @@ class KasRepository(
         )
     }
 
+    suspend fun runCurrentIntegrityAudit(): IntegrityAuditSnapshot {
+        val accountsSnapshot = accountDao.getAllAccounts().first()
+        val transactionsSnapshot = (
+            transactionDao.getAllActiveTransactions().first() +
+                transactionDao.getArchivedTransactions().first()
+            ).distinctBy { it.id }
+        val budgetsSnapshot = budgetDao.getAllBudgets().first()
+        val receivablesSnapshot = receivableDao.getAllReceivables().first()
+        val employeesSnapshot = employeeDao.getAllEmployees().first()
+        val attendancesSnapshot = attendanceDao.getAllAttendances().first()
+        val projectsSnapshot = projectDao.getAllProjects().first()
+
+        val result = runIntegrityAudit(
+            accounts = accountsSnapshot,
+            transactions = transactionsSnapshot,
+            budgets = budgetsSnapshot,
+            receivables = receivablesSnapshot,
+            employees = employeesSnapshot,
+            attendances = attendancesSnapshot,
+            projects = projectsSnapshot
+        )
+        val totalBalance = calculateAccountBalances(accountsSnapshot, transactionsSnapshot).sumOf { it.currentBalance }
+        return IntegrityAuditSnapshot(result, totalBalance, transactionsSnapshot.size)
+    }
+
     fun runIntegrityAudit(
         accounts: List<AccountEntity>,
         transactions: List<TransactionEntity>,
         budgets: List<BudgetEntity>,
         receivables: List<ReceivableEntity>,
         employees: List<EmployeeEntity>,
-        attendances: List<AttendanceEntity>
+        attendances: List<AttendanceEntity>,
+        projects: List<ProjectEntity>? = null
     ): IntegrityAuditResult {
         val issues = mutableListOf<String>()
         val checkedAt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
@@ -1282,6 +1321,11 @@ class KasRepository(
                 issues += "Transaksi ${tx.id}: kategori Transfer Masuk tercatat sebagai pemasukan; verifikasi dan pindahkan ke buku transfer agar pendapatan tidak ganda."
             }
             if (tx.account.trim().lowercase(Locale.getDefault()) !in accountNames) issues += "Transaksi ${tx.id}: akun ${tx.account} tidak terdaftar."
+            if (tx.project.isNotBlank() && projects != null &&
+                projects.none { it.name.equals(tx.project.trim(), ignoreCase = true) }
+            ) {
+                issues += "Transaksi ${tx.id}: proyek ${tx.project} tidak terdaftar."
+            }
             if (tx.type == "TRANSFER") {
                 val destination = tx.toAccount?.trim().orEmpty()
                 if (destination.isBlank()) issues += "Transfer ${tx.id}: akun tujuan kosong."
@@ -1298,6 +1342,19 @@ class KasRepository(
             if (!item.totalAmount.isFinite() || item.totalAmount <= 0.0) issues += "${item.type} ${item.id}: total nominal tidak valid."
             if (!item.paidAmount.isFinite() || item.paidAmount < 0.0 || item.paidAmount > item.totalAmount) issues += "${item.type} ${item.id}: paidAmount tidak valid."
             if (item.targetAccount.trim().lowercase(Locale.getDefault()) !in accountNames) issues += "${item.type} ${item.id}: akun terkait tidak terdaftar."
+
+            val expectedReceiptPrefix = if (item.type == "PIUTANG") "PIU-" else "HUT-"
+            val expectedCategory = if (item.type == "PIUTANG") "Piutang Masuk" else "Belanja Barang"
+            val expectedType = if (item.type == "PIUTANG") "MASUK" else "KELUAR"
+            val linkedLedgerTotal = transactions.filter {
+                it.receiptNo.equals(expectedReceiptPrefix + item.id, ignoreCase = true) &&
+                    it.category.equals(expectedCategory, ignoreCase = true) &&
+                    it.type == expectedType &&
+                    it.status == "Selesai"
+            }.sumOf { it.amount }
+            if (item.paidAmount.isFinite() && kotlin.math.abs(linkedLedgerTotal - item.paidAmount) > 0.01) {
+                issues += "${item.type} ${item.id}: pembayaran pada master (Rp ${item.paidAmount.toLong()}) tidak sama dengan ledger tertaut (Rp ${linkedLedgerTotal.toLong()})."
+            }
         }
 
         attendances.forEach { att ->
@@ -1328,13 +1385,12 @@ class KasRepository(
         }
     }
 
-    suspend fun exportDataToJson(
-        transactions: List<TransactionEntity>,
-        accounts: List<AccountEntity>,
-        budgets: List<BudgetEntity>,
-        receivables: List<ReceivableEntity>,
-        notes: List<CashNoteEntity>
-    ): String {
+    suspend fun exportDataToJson(): String {
+        val transactions = transactionDao.getAllActiveTransactions().first()
+        val accounts = accountDao.getAllAccounts().first()
+        val budgets = budgetDao.getAllBudgets().first()
+        val receivables = receivableDao.getAllReceivables().first()
+        val notes = noteDao.getAllNotes().first()
         val root = JSONObject()
         root.put("app", "Sistem Kas")
         root.put("version", "6.0")
@@ -2004,6 +2060,14 @@ class KasRepository(
         "Waktu Arsip", "Diarsipkan Oleh", "Kelompok Dana"
     )
 
+    suspend fun exportCurrentTransactionsToCsv(): String {
+        val currentTransactions = (
+            transactionDao.getAllActiveTransactions().first() +
+                transactionDao.getArchivedTransactions().first()
+            ).distinctBy { it.id }
+        return exportTransactionsToCsv(currentTransactions)
+    }
+
     fun exportTransactionsToCsv(transactions: List<TransactionEntity>): String {
         val ordered = transactions.sortedWith(
             compareByDescending<TransactionEntity> { it.date }
@@ -2073,6 +2137,7 @@ class KasRepository(
                 ).map { it.id }.toSet()
             val txList = mutableListOf<TransactionEntity>()
             val seenIds = mutableSetOf<String>()
+            val linkedPaymentsByReceivable = linkedMapOf<String, Double>()
             val errors = mutableListOf<String>()
 
             fun cell(row: List<String>, vararg names: String): String {
@@ -2143,6 +2208,30 @@ class KasRepository(
                         isArchived=isArchived, archivedAt=archivedAt, archivedBy=archivedBy, fundBucket=fundBucket
                     )
                     validateTransaction(tx)
+                    when {
+                        receiptNo.startsWith("PIU-", ignoreCase = true) -> {
+                            require(type == "MASUK" && category.equals("Piutang Masuk", ignoreCase = true) && status == "Selesai") {
+                                "Baris pembayaran PIUTANG harus bertipe MASUK, kategori Piutang Masuk, dan status Selesai."
+                            }
+                            val receivableId = receiptNo.substring(4)
+                            val linked = receivableDao.getReceivableById(receivableId)
+                                ?: throw IllegalArgumentException("Tagihan $receivableId tidak ditemukan. Pulihkan master data melalui Backup JSON sebelum mengimpor pembayaran.")
+                            require(linked.type == "PIUTANG") { "Referensi $receiptNo bukan master PIUTANG." }
+                            linkedPaymentsByReceivable[receivableId] =
+                                (linkedPaymentsByReceivable[receivableId] ?: 0.0) + amount
+                        }
+                        receiptNo.startsWith("HUT-", ignoreCase = true) -> {
+                            require(type == "KELUAR" && category.equals("Belanja Barang", ignoreCase = true) && status == "Selesai") {
+                                "Baris pembayaran HUTANG harus bertipe KELUAR, kategori Belanja Barang, dan status Selesai."
+                            }
+                            val receivableId = receiptNo.substring(4)
+                            val linked = receivableDao.getReceivableById(receivableId)
+                                ?: throw IllegalArgumentException("Tagihan $receivableId tidak ditemukan. Pulihkan master data melalui Backup JSON sebelum mengimpor pembayaran.")
+                            require(linked.type == "HUTANG") { "Referensi $receiptNo bukan master HUTANG." }
+                            linkedPaymentsByReceivable[receivableId] =
+                                (linkedPaymentsByReceivable[receivableId] ?: 0.0) + amount
+                        }
+                    }
                     txList += tx
                 } catch (ex: Exception) {
                     errors += "Baris " + rowNumber + ": " + (ex.message ?: "data tidak valid")
@@ -2158,7 +2247,27 @@ class KasRepository(
                 )
             }
 
-            if (txList.isNotEmpty()) transactionDao.insertTransactions(txList)
+            database.withTransaction {
+                val idsNow = (
+                    transactionDao.getAllActiveTransactions().first() +
+                        transactionDao.getArchivedTransactions().first()
+                    ).map { it.id }.toSet()
+                require(txList.none { it.id in idsNow }) {
+                    "Salah satu ID transaksi sudah masuk saat proses impor berjalan. Tidak ada data yang diimpor."
+                }
+
+                linkedPaymentsByReceivable.forEach { (receivableId, amount) ->
+                    val current = receivableDao.getReceivableById(receivableId)
+                        ?: throw IllegalArgumentException("Tagihan $receivableId tidak ditemukan saat impor disimpan.")
+                    require(amount <= current.remainingAmount + 0.000001) {
+                        "Total pembayaran impor untuk tagihan $receivableId melebihi sisa tagihan Rp ${current.remainingAmount.toLong()}."
+                    }
+                    val paid = (current.paidAmount + amount).coerceAtMost(current.totalAmount)
+                    val status = if (paid >= current.totalAmount) "Lunas" else current.status
+                    receivableDao.updateReceivable(current.copy(paidAmount = paid, status = status))
+                }
+                if (txList.isNotEmpty()) transactionDao.insertTransactions(txList)
+            }
             Result.success(txList.size)
         } catch (ex: Exception) {
             Result.failure(ex)

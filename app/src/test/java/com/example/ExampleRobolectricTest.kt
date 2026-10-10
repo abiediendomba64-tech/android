@@ -1035,13 +1035,7 @@ class ExampleRobolectricTest {
             )
         )
 
-        val json = repository.exportDataToJson(
-            transactions = db.transactionDao().getAllActiveTransactions().first(),
-            accounts = db.accountDao().getAllAccounts().first(),
-            budgets = db.budgetDao().getAllBudgets().first(),
-            receivables = db.receivableDao().getAllReceivables().first(),
-            notes = db.noteDao().getAllNotes().first()
-        )
+        val json = repository.exportDataToJson()
 
         val restoredDb = Room.inMemoryDatabaseBuilder(
             ApplicationProvider.getApplicationContext<Context>(),
@@ -1447,6 +1441,118 @@ class ExampleRobolectricTest {
         assertEquals(137500.0, allocations["Cut & Fill A"] ?: 0.0, 0.01)
         assertEquals(repository.calculatePayrollTotal(listOf(employee), attendances), allocations.values.sum(), 0.01)
         assertTrue(allocations.values.all { it >= 0.0 })
+    }
+
+
+    @Test
+    fun exportsAndIntegrityAuditReadCurrentRoomDataWithoutUiCollectors() = runBlocking {
+        db.accountDao().insertAccount(AccountEntity("acc-live-export", "Kas Live", "Kas", 500000.0))
+        db.transactionDao().insertTransaction(
+            TransactionEntity(
+                id = "TX-LIVE-EXPORT",
+                type = "MASUK",
+                date = "2026-10-10",
+                time = "10:00:00",
+                account = "Kas Live",
+                name = "Pemasukan hidup",
+                category = "Penjualan",
+                description = "",
+                amount = 125000.0,
+                status = "Selesai"
+            )
+        )
+        db.transactionDao().insertTransaction(
+            TransactionEntity(
+                id = "TX-LIVE-AUDIT-INVALID",
+                type = "KELUAR",
+                date = "2026-10-10",
+                time = "10:01:00",
+                account = "Akun Tidak Ada",
+                name = "Harus terdeteksi audit",
+                category = "Operasional",
+                description = "",
+                amount = 25000.0,
+                status = "Selesai"
+            )
+        )
+
+        val json = repository.exportDataToJson()
+        val csv = repository.exportCurrentTransactionsToCsv()
+        val audit = repository.runCurrentIntegrityAudit()
+
+        assertTrue("Backup mesti membaca akun dari DB saat ini.", json.contains("Kas Live"))
+        assertTrue("Backup mesti membaca transaksi dari DB saat ini.", json.contains("TX-LIVE-EXPORT"))
+        assertTrue("Export CSV mesti membaca transaksi dari DB saat ini.", csv.contains("TX-LIVE-EXPORT"))
+        assertEquals(2, audit.transactionCount)
+        assertFalse("Audit langsung ke DB harus menemukan akun yang tidak dikenal.", audit.result.passed)
+        assertTrue(audit.result.issues.any { it.contains("Akun Tidak Ada") })
+    }
+
+    @Test
+    fun linkedReceivablePaymentsCannotBeEditedAndCsvImportKeepsMasterBalanceSynchronized() = runBlocking {
+        db.accountDao().insertAccount(AccountEntity("acc-csv-piu", "Kas CSV", "Kas", 1000000.0))
+        val receivable = com.example.data.model.ReceivableEntity(
+            id = "PIU-CSV-001",
+            date = "2026-10-01",
+            customerName = "Pelanggan CSV",
+            description = "Penjualan",
+            totalAmount = 300000.0,
+            dueDate = "2026-12-01",
+            targetAccount = "Kas CSV",
+            project = "",
+            fundBucket = "PT"
+        )
+        repository.saveReceivable(receivable)
+
+        val header = listOf(
+            "ID", "Tipe", "Tanggal", "Jam", "Akun", "Ke Akun", "Nama Transaksi", "Kategori",
+            "Keterangan", "Nominal", "Alokasi", "PIC", "Bukti", "No Bukti", "Proyek",
+            "Catatan", "Status", "Waktu Input", "Input Oleh", "Diarsipkan", "Waktu Arsip",
+            "Diarsipkan Oleh", "Kelompok Dana"
+        ).joinToString(",")
+        fun paymentRow(id: String, amount: String) = listOf(
+            id, "MASUK", "2026-10-10", "10:00:00", "Kas CSV", "", "Pelunasan Piutang",
+            "Piutang Masuk", "Pembayaran spreadsheet", amount, "Operasional", "Bendahara", "",
+            "PIU-PIU-CSV-001", "", "", "Selesai", "", "Spreadsheet Import", "TIDAK", "", "", "PT"
+        ).joinToString(",")
+        val imported = repository.importTransactionsFromCsv("$header\n${paymentRow("TX-PIU-CSV-OK", "100000")}\n")
+        assertTrue("Import pembayaran terhubung harus sukses: ${imported.exceptionOrNull()?.message}", imported.isSuccess)
+        assertEquals(100000.0, db.receivableDao().getReceivableById(receivable.id)?.paidAmount ?: -1.0, 0.01)
+
+        val overpay = repository.importTransactionsFromCsv("$header\n${paymentRow("TX-PIU-CSV-OVER", "250000")}\n")
+        assertTrue("Import yang melebihi sisa tagihan harus ditolak.", overpay.isFailure)
+        assertEquals(100000.0, db.receivableDao().getReceivableById(receivable.id)?.paidAmount ?: -1.0, 0.01)
+        assertEquals(1, db.transactionDao().getAllActiveTransactions().first().size)
+
+        val transaction = db.transactionDao().getAllActiveTransactions().first().single()
+        try {
+            repository.updateTransaction(transaction.copy(amount = 50000.0), transaction)
+            throw AssertionError("Transaksi pelunasan piutang tidak boleh diedit terpisah dari master tagihan.")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message?.contains("terikat") == true)
+        }
+        assertEquals(100000.0, db.transactionDao().getTransactionById(transaction.id)?.amount ?: -1.0, 0.01)
+        assertEquals(100000.0, db.receivableDao().getReceivableById(receivable.id)?.paidAmount ?: -1.0, 0.01)
+    }
+
+    @Test
+    fun payrollLedgerRowsCannotBeEditedToBypassPeriodDoublePaymentProtection() = runBlocking {
+        db.accountDao().insertAccount(AccountEntity("acc-payroll-immutable", "Kas Payroll", "Kas", 500000.0))
+        repository.savePayrollDisbursement(
+            period = "2026-10",
+            totalAmount = 100000.0,
+            accountName = "Kas Payroll",
+            allocationsByProject = mapOf("" to 100000.0)
+        )
+        val payroll = db.transactionDao().getAllActiveTransactions().first().single()
+        try {
+            repository.updateTransaction(payroll.copy(status = "Batal", receiptNo = "DIUBAH"), payroll)
+            throw AssertionError("Transaksi payroll terkait tidak boleh diedit.")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message?.contains("terikat") == true)
+        }
+        assertEquals("PAYROLL-2026-10", db.transactionDao().getTransactionById(payroll.id)?.receiptNo)
+        assertEquals("Selesai", db.transactionDao().getTransactionById(payroll.id)?.status)
     }
 
 }

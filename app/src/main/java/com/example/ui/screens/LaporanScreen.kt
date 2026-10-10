@@ -66,6 +66,7 @@ fun LaporanScreen(
     val context = LocalContext.current
     val transactions by viewModel.ledgerTransactions.collectAsStateWithLifecycle()
     val accounts by viewModel.accounts.collectAsStateWithLifecycle()
+    val projects by viewModel.projects.collectAsStateWithLifecycle()
     val kpis by viewModel.dashboardKpis.collectAsStateWithLifecycle()
 
     val dateFormat = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()) }
@@ -80,19 +81,29 @@ fun LaporanScreen(
     var endDate by remember { mutableStateOf(today) }
     var selectedAccount by remember { mutableStateOf("Semua") }
     var selectedCategory by remember { mutableStateOf("Semua") }
+    var selectedFundBucket by remember { mutableStateOf("Semua") }
+    var selectedProject by remember { mutableStateOf("Semua") }
     var selectedStatus by remember { mutableStateOf("Selesai") }
 
     val accountFilterOptions = listOf("Semua") + accounts.map { it.name }
     val categoryFilterOptions = listOf("Semua") + viewModel.masterKategoriMasuk + viewModel.masterKategoriKeluar
+    val fundBucketFilterOptions = listOf("Semua") + viewModel.masterFundBuckets
+    val projectFilterOptions = listOf("Semua", "PT / Umum") + projects.map { it.name }
 
     // Filtered reporting data
     val reportTransactions = transactions.filter { tx ->
         val inDateRange = tx.date >= startDate && tx.date <= endDate
-        val matchAccount = selectedAccount == "Semua" || tx.account.equals(selectedAccount, ignoreCase = true)
+        val matchAccount = selectedAccount == "Semua" ||
+            tx.account.equals(selectedAccount, ignoreCase = true) ||
+            (tx.type == "TRANSFER" && tx.toAccount.equals(selectedAccount, ignoreCase = true))
         val matchCategory = selectedCategory == "Semua" || tx.category.equals(selectedCategory, ignoreCase = true)
+        val matchFundBucket = selectedFundBucket == "Semua" || tx.fundBucket.equals(selectedFundBucket, ignoreCase = true)
+        val matchProject = selectedProject == "Semua" ||
+            (selectedProject == "PT / Umum" && tx.project.isBlank()) ||
+            tx.project.equals(selectedProject, ignoreCase = true)
         val matchStatus = selectedStatus == "Semua" || tx.status.equals(selectedStatus, ignoreCase = true)
 
-        inDateRange && matchAccount && matchCategory && matchStatus
+        inDateRange && matchAccount && matchCategory && matchFundBucket && matchProject && matchStatus
     }
 
     val totalMasuk = reportTransactions.filter { it.type == "MASUK" }.sumOf { it.amount }
@@ -141,6 +152,7 @@ fun LaporanScreen(
                                     *LAPORAN KEUANGAN SISTEM KAS*
                                     Periode: $startDate s/d $endDate
                                     Akun: $selectedAccount | Kategori: $selectedCategory
+                                    Dana: $selectedFundBucket | Proyek: $selectedProject | Status: $selectedStatus
                                     ------------------------------------
                                     📥 Total Kas Masuk : ${formatRupiah(totalMasuk)}
                                     📤 Total Kas Keluar: ${formatRupiah(totalKeluar)}
@@ -170,6 +182,7 @@ fun LaporanScreen(
                                     LAPORAN KEUANGAN SISTEM KAS
                                     Periode: $startDate s/d $endDate
                                     Akun: $selectedAccount | Kategori: $selectedCategory
+                                    Dana: $selectedFundBucket | Proyek: $selectedProject | Status: $selectedStatus
                                     
                                     Total Kas Masuk : ${formatRupiah(totalMasuk)}
                                     Total Kas Keluar: ${formatRupiah(totalKeluar)}
@@ -260,6 +273,34 @@ fun LaporanScreen(
                             modifier = Modifier.weight(1f)
                         )
                     }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        FormDropdown(
+                            label = "Kelompok Dana",
+                            selectedValue = selectedFundBucket,
+                            options = fundBucketFilterOptions,
+                            onValueChange = { selectedFundBucket = it },
+                            modifier = Modifier.weight(1f)
+                        )
+                        FormDropdown(
+                            label = "Filter Proyek",
+                            selectedValue = selectedProject,
+                            options = projectFilterOptions.distinct(),
+                            onValueChange = { selectedProject = it },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    FormDropdown(
+                        label = "Status Transaksi",
+                        selectedValue = selectedStatus,
+                        options = listOf("Semua", "Selesai", "Draft", "Pending", "Batal", "Dihapus"),
+                        onValueChange = { selectedStatus = it },
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
             }
         }

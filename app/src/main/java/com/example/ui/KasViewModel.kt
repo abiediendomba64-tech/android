@@ -614,22 +614,15 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
 
     fun jalankanAuditSistem(onComplete: (String) -> Unit = {}) {
         launchSafely {
-            val result = repository.runIntegrityAudit(
-                accounts = accounts.value,
-                transactions = ledgerTransactions.value,
-                budgets = budgets.value,
-                receivables = receivables.value,
-                employees = allEmployees.value,
-                attendances = attendances.value
-            )
-            val accountsSnapshot = accountsWithBalance.value
-            val totalSaldo = accountsSnapshot.sumOf { it.currentBalance }
+            val snapshot = repository.runCurrentIntegrityAudit()
+            val result = snapshot.result
+            val totalSaldo = snapshot.totalBalance
             val report = buildString {
                 appendLine("*HASIL PEMERIKSAAN INTEGRITAS SISTEM KAS*")
                 appendLine("Waktu Pemeriksaan: ${result.checkedAt}")
                 appendLine("Status: ${if (result.passed) "LULUS" else "GAGAL"}")
                 appendLine("Total saldo ledger: ${formatRupiah(totalSaldo)}")
-                appendLine("Transaksi ledger: ${ledgerTransactions.value.size}")
+                appendLine("Transaksi ledger: ${snapshot.transactionCount}")
                 if (result.issues.isEmpty()) {
                     appendLine("Tidak ditemukan ketidaksesuaian data pada pemeriksaan ini.")
                 } else {
@@ -644,7 +637,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
                     dateFormatted = result.checkedAt,
                     action = if (result.passed) "SYSTEM_AUDIT_PASS" else "SYSTEM_AUDIT_FAIL",
                     recordId = "AUDIT-" + System.currentTimeMillis().toString().takeLast(8),
-                    details = "Pemeriksaan integritas: ${result.issues.size} temuan; ${ledgerTransactions.value.size} transaksi ledger; saldo ${formatRupiah(totalSaldo)}.",
+                    details = "Pemeriksaan integritas: ${result.issues.size} temuan; ${snapshot.transactionCount} transaksi ledger; saldo ${formatRupiah(totalSaldo)}.",
                     user = "Sistem Audit",
                     verifiedFormulaStatus = if (result.passed) "AUDIT_PASS" else "AUDIT_FAIL",
                     balanceAfter = totalSaldo
@@ -850,22 +843,16 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     suspend fun exportJson(): String {
-        return repository.exportDataToJson(
-            transactions = activeTransactions.value,
-            accounts = accounts.value,
-            budgets = budgets.value,
-            receivables = receivables.value,
-            notes = notes.value
-        )
+        return repository.exportDataToJson()
     }
 
     suspend fun restoreFromJson(jsonStr: String): Result<Int> {
         return repository.restoreDataFromJson(jsonStr)
     }
 
-    fun exportCsv(): String {
-        // Archived records still affect real balances and remain part of the ledger.
-        return repository.exportTransactionsToCsv(ledgerTransactions.value)
+    suspend fun exportCsv(): String {
+        // Query the live Room ledger; UI StateFlow values may be stale when the screen is inactive.
+        return repository.exportCurrentTransactionsToCsv()
     }
 
     suspend fun importCsv(csvContent: String): Result<Int> {
