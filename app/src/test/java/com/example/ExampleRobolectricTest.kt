@@ -2382,7 +2382,7 @@ class ExampleRobolectricTest {
                 details = "",
                 user = "",
                 verifiedFormulaStatus = "",
-                balanceAfter = Double.NaN
+                balanceAfter = 0.0
             )
         )
 
@@ -2390,7 +2390,29 @@ class ExampleRobolectricTest {
         assertFalse(result.passed)
         assertTrue(result.issues.any { it.contains("Audit log") && it.contains("metadata wajib tidak lengkap") })
         assertTrue(result.issues.any { it.contains("Audit log") && it.contains("timestamp tidak valid") })
-        assertTrue(result.issues.any { it.contains("Audit log") && it.contains("balanceAfter tidak valid") })
+
+        val directAudit = repository.runIntegrityAudit(
+            accounts = emptyList(),
+            transactions = emptyList(),
+            budgets = emptyList(),
+            receivables = emptyList(),
+            employees = emptyList(),
+            attendances = emptyList(),
+            auditLogs = listOf(
+                AuditLogEntity(
+                    id = 1L,
+                    timestamp = 1L,
+                    dateFormatted = "2026-10-11 00:00:00",
+                    action = "TEST",
+                    recordId = "TEST-1",
+                    details = "Audit nilai balanceAfter",
+                    user = "Test",
+                    verifiedFormulaStatus = "RECORDED",
+                    balanceAfter = Double.NaN
+                )
+            )
+        )
+        assertTrue(directAudit.issues.any { it.contains("Audit log") && it.contains("balanceAfter tidak valid") })
     }
 
     @Test
