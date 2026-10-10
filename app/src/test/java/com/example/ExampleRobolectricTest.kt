@@ -2099,4 +2099,32 @@ class ExampleRobolectricTest {
         }
     }
 
+
+    @Test
+    fun cashFlowStatementRejectsInvalidOrReversedDateRanges() {
+        try {
+            repository.calculateCashFlowStatement(
+                transactions = emptyList(),
+                accounts = emptyList(),
+                startDate = "2026-02-30",
+                endDate = "2026-03-01"
+            )
+            throw AssertionError("Tanggal yang tidak ada di kalender harus ditolak.")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message?.contains("Tanggal mulai") == true)
+        }
+
+        try {
+            repository.calculateCashFlowStatement(
+                transactions = emptyList(),
+                accounts = emptyList(),
+                startDate = "2026-10-31",
+                endDate = "2026-10-01"
+            )
+            throw AssertionError("Rentang tanggal terbalik harus ditolak.")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message?.contains("tanggal akhir") == true)
+        }
+    }
+
 }

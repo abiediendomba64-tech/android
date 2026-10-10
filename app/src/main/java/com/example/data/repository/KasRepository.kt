@@ -1195,6 +1195,9 @@ class KasRepository(
         startDate: String,
         endDate: String
     ): CashFlowStatement {
+        requireIsoDate(startDate, "Tanggal mulai laporan arus kas")
+        requireIsoDate(endDate, "Tanggal akhir laporan arus kas")
+        require(startDate <= endDate) { "Tanggal mulai laporan arus kas tidak boleh melewati tanggal akhir." }
         val settledTx = transactions.filter { it.status == "Selesai" }
         val periodTx = settledTx.filter { it.date >= startDate && it.date <= endDate }
 
