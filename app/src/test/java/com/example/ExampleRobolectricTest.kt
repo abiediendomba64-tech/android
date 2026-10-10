@@ -9,6 +9,7 @@ import com.example.data.model.AttendanceEntity
 import com.example.data.model.AuditLogEntity
 import com.example.data.model.BankReconEntity
 import com.example.data.model.BudgetEntity
+import com.example.data.model.CashNoteEntity
 import com.example.data.model.EmployeeEntity
 import com.example.data.model.HousingUnitEntity
 import com.example.data.model.ProjectEntity
@@ -2178,6 +2179,190 @@ class ExampleRobolectricTest {
         } catch (e: IllegalArgumentException) {
             assertTrue(e.message?.contains("tanggal akhir") == true)
         }
+    }
+
+
+    @Test
+    fun budgetRealizationSeparatesPtGeneralFromProjectExpenses() {
+        val budgets = listOf(
+            BudgetEntity(period = "2026-10", category = "Operasional", budgetAmount = 500000.0, project = "", fundBucket = "PT"),
+            BudgetEntity(period = "2026-10", category = "Operasional", budgetAmount = 500000.0, project = "Perumahan A", fundBucket = "PT")
+        )
+        val transactions = listOf(
+            TransactionEntity(
+                id = "TX-BUDGET-GENERAL", type = "KELUAR", date = "2026-10-10", time = "10:00:00",
+                account = "Kas", name = "Operasional kantor", category = "Belanja", description = "",
+                amount = 100000.0, allocation = "Operasional", status = "Selesai", project = "", fundBucket = "PT"
+            ),
+            TransactionEntity(
+                id = "TX-BUDGET-PROJECT-A", type = "KELUAR", date = "2026-10-11", time = "10:00:00",
+                account = "Kas", name = "Operasional proyek A", category = "Belanja", description = "",
+                amount = 250000.0, allocation = "Operasional", status = "Selesai", project = "Perumahan A", fundBucket = "PT"
+            ),
+            TransactionEntity(
+                id = "TX-BUDGET-PROJECT-B", type = "KELUAR", date = "2026-10-12", time = "10:00:00",
+                account = "Kas", name = "Operasional proyek B", category = "Belanja", description = "",
+                amount = 90000.0, allocation = "Operasional", status = "Selesai", project = "Perumahan B", fundBucket = "PT"
+            )
+        )
+
+        val results = repository.calculateBudgetRealizations(budgets, transactions)
+        assertEquals(100000.0, results.single { it.budget.project.isBlank() }.realization, 0.01)
+        assertEquals(250000.0, results.single { it.budget.project == "Perumahan A" }.realization, 0.01)
+        assertEquals(350000.0, results.sumOf { it.realization }, 0.01)
+    }
+
+    @Test
+    fun spreadsheetPayrollImportNormalizesReceiptFieldsAndBlocksOverlappingPeriods() = runBlocking {
+        db.accountDao().insertAccount(AccountEntity("acc-csv-payroll", "Kas Payroll Import", "Kas", 1000000.0))
+        repository.saveProject(ProjectEntity(
+            id = "PRJ-PAYROLL-A", name = "Payroll Proyek A", category = "Lainnya",
+            businessModel = "Tidak berlaku", location = "", startDate = "2026-01-01",
+            targetEndDate = "2026-12-31", budgetAmount = 0.0, status = "Berjalan",
+            notes = "", isActive = true, createdAt = 1790812800000L
+        ))
+        repository.saveProject(ProjectEntity(
+            id = "PRJ-PAYROLL-B", name = "Payroll Proyek B", category = "Lainnya",
+            businessModel = "Tidak berlaku", location = "", startDate = "2026-01-01",
+            targetEndDate = "2026-12-31", budgetAmount = 0.0, status = "Berjalan",
+            notes = "", isActive = true, createdAt = 1790812800001L
+        ))
+
+        val headers = listOf(
+            "ID", "Tipe", "Tanggal", "Jam", "Akun", "Ke Akun", "Nama Transaksi", "Kategori",
+            "Keterangan", "Nominal", "Alokasi", "PIC", "Bukti", "No Bukti", "Proyek",
+            "Catatan", "Status", "Waktu Input", "Input Oleh", "Diarsipkan", "Waktu Arsip",
+            "Diarsipkan Oleh", "Kelompok Dana"
+        )
+        fun csvRow(id: String, project: String, receipt: String, category: String, status: String, amount: String): String {
+            val values = listOf(
+                id, "keluar", "2026-10-10", "10:00:00", "Kas Payroll Import", "", "Pencairan payroll",
+                category, "", amount, "Gaji", "Bendahara", "", receipt, project, "", status,
+                "2026-10-10 10:00:00.000", "Spreadsheet Import", "TIDAK", "", "", "pt"
+            )
+            return values.joinToString(",") { value ->
+                if (value.any { it == ',' || it == '"' || it == '\n' || it == '\r' }) {
+                    "\"" + value.replace("\"", "\"\"") + "\""
+                } else value
+            }
+        }
+        fun makeCsv(idA: String, idB: String, receipt: String, category: String, status: String): String =
+            "\uFEFF" + headers.joinToString(",") + "\n" +
+                csvRow(idA, "Payroll Proyek A", receipt, category, status, "100000") + "\n" +
+                csvRow(idB, "Payroll Proyek B", receipt, category, status, "150000")
+
+        val imported = repository.importTransactionsFromCsv(
+            makeCsv("CSV-PAYROLL-A", "CSV-PAYROLL-B", "payroll-2026-10", "gaji", "selesai")
+        )
+        assertTrue(imported.exceptionOrNull()?.message.orEmpty(), imported.isSuccess)
+        assertEquals(2, imported.getOrNull())
+        val payrollRows = db.transactionDao().getAllActiveTransactions().first()
+        assertEquals(2, payrollRows.size)
+        assertTrue(payrollRows.all { it.category == "Gaji" && it.status == "Selesai" && it.receiptNo == "PAYROLL-2026-10" })
+
+        val repeated = repository.importTransactionsFromCsv(
+            makeCsv("CSV-PAYROLL-REPEAT-A", "CSV-PAYROLL-REPEAT-B", "PAYROLL-2026-10", "Gaji", "Selesai")
+        )
+        assertFalse(repeated.isSuccess)
+        assertTrue(repeated.exceptionOrNull()?.message.orEmpty().contains("bertumpang tindih", ignoreCase = true))
+        assertEquals(2, db.transactionDao().getAllActiveTransactions().first().size)
+
+        val secondPayout = runCatching {
+            repository.savePayrollDisbursement(
+                period = "2026-10",
+                totalAmount = 250000.0,
+                accountName = "Kas Payroll Import",
+                allocationsByProject = mapOf("Payroll Proyek A" to 100000.0, "Payroll Proyek B" to 150000.0)
+            )
+        }
+        assertTrue(secondPayout.isFailure)
+    }
+
+    @Test
+    fun restoreRejectsDuplicateProjectNamesBeforeAnyDatabaseWrite() = runBlocking {
+        val backup = """
+            {
+              "accounts": [{
+                "id": "restore-preflight-account",
+                "name": "Kas Restore Preflight",
+                "type": "Kas",
+                "initialBalance": 900000,
+                "colorHex": "#1E56A0",
+                "isActive": true
+              }],
+              "transactions": [],
+              "projects": [
+                {
+                  "id": "PRJ-DUP-A", "name": "Nama Proyek Sama", "category": "Lainnya",
+                  "businessModel": "Tidak berlaku", "location": "", "startDate": "2026-01-01",
+                  "targetEndDate": "2026-12-31", "budgetAmount": 0, "status": "Berjalan",
+                  "notes": "", "isActive": true, "createdAt": 1790812800000
+                },
+                {
+                  "id": "PRJ-DUP-B", "name": "nama proyek sama", "category": "Lainnya",
+                  "businessModel": "Tidak berlaku", "location": "", "startDate": "2026-01-01",
+                  "targetEndDate": "2026-12-31", "budgetAmount": 0, "status": "Berjalan",
+                  "notes": "", "isActive": true, "createdAt": 1790812800001
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val result = repository.restoreDataFromJson(backup)
+        assertFalse(result.isSuccess)
+        assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("nama proyek duplikat", ignoreCase = true))
+        assertNull(db.accountDao().getAccountById("restore-preflight-account"))
+        assertTrue(db.projectDao().getAllProjects().first().isEmpty())
+    }
+
+    @Test
+    fun restoreRejectsDuplicateEmployeeAttendanceDatesBeforeAnyDatabaseWrite() = runBlocking {
+        val backup = """
+            {
+              "accounts": [],
+              "transactions": [],
+              "employees": [{
+                "id": "EMP-RESTORE-DUP", "name": "Karyawan Restore", "position": "Staf",
+                "department": "Lapangan", "phone": "", "dailyRate": 100000,
+                "monthlySalary": 0, "isActive": true, "defaultProject": ""
+              }],
+              "attendances": [
+                {
+                  "id": "ATT-RESTORE-DUP-1", "employeeId": "EMP-RESTORE-DUP", "employeeName": "Karyawan Restore",
+                  "department": "Lapangan", "date": "2026-10-10", "timeIn": "08:00", "timeOut": "17:00",
+                  "status": "Hadir", "overtimeHours": 0, "dailyAllowance": 100000, "notes": "", "project": ""
+                },
+                {
+                  "id": "ATT-RESTORE-DUP-2", "employeeId": "EMP-RESTORE-DUP", "employeeName": "Karyawan Restore",
+                  "department": "Lapangan", "date": "2026-10-10", "timeIn": "08:00", "timeOut": "17:00",
+                  "status": "Hadir", "overtimeHours": 0, "dailyAllowance": 100000, "notes": "", "project": ""
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val result = repository.restoreDataFromJson(backup)
+        assertFalse(result.isSuccess)
+        assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("absensi", ignoreCase = true))
+        assertTrue(db.employeeDao().getAllEmployees().first().isEmpty())
+        assertTrue(db.attendanceDao().getAllAttendances().first().isEmpty())
+    }
+
+    @Test
+    fun integrityAuditInspectsNotesAndReconciliationLedgerConsistency() = runBlocking {
+        db.accountDao().insertAccount(AccountEntity("acc-audit-full", "Kas Audit Lengkap", "Kas", 1000000.0))
+        db.noteDao().insertNote(CashNoteEntity(
+            date = "2026-02-31", title = "", content = "Catatan rusak"
+        ))
+        db.bankReconDao().insertReconciliation(BankReconEntity(
+            id = "REC-AUDIT-BAD", accountName = "Kas Audit Lengkap", period = "2026-10",
+            bookBalance = 0.0, statementBalance = 900000.0, difference = 0.0, status = "Cocok"
+        ))
+
+        val result = repository.runCurrentIntegrityAudit().result
+        assertFalse(result.passed)
+        assertTrue(result.issues.any { it.contains("Catatan", ignoreCase = true) })
+        assertTrue(result.issues.any { it.contains("Rekonsiliasi REC-AUDIT-BAD", ignoreCase = true) })
     }
 
 }
