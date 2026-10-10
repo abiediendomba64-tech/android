@@ -859,12 +859,62 @@ class KasRepository(
         }
     }
 
+    private fun isSettledPayrollTransaction(tx: TransactionEntity): Boolean =
+        tx.category.equals("Gaji", ignoreCase = true) &&
+            tx.status.equals("Selesai", ignoreCase = true) &&
+            tx.receiptNo.trim().startsWith("PAYROLL-", ignoreCase = true)
+
+    private fun payrollPeriodFromReceipt(receiptNo: String): String? {
+        val normalized = receiptNo.trim()
+        if (!normalized.startsWith("PAYROLL-", ignoreCase = true)) return null
+        return normalized.substring("PAYROLL-".length).trim().takeIf { it.isNotBlank() }
+    }
+
+    /**
+     * Returns a clear conflict message when a candidate payroll period overlaps a paid
+     * period in the ledger or overlaps a different period represented in the same import.
+     * Multiple ledger rows sharing the exact same period are allowed as payroll allocations.
+     */
+    private fun payrollPeriodConflict(
+        candidatePeriods: Collection<String>,
+        existingTransactions: List<TransactionEntity>
+    ): String? {
+        val candidates = candidatePeriods.map { it.trim() }.filter { it.isNotBlank() }.distinct()
+        val candidateRanges = candidates.associateWith { payrollPeriodRange(it) }
+
+        for (i in candidates.indices) {
+            for (j in i + 1 until candidates.size) {
+                val a = candidateRanges.getValue(candidates[i])
+                val b = candidateRanges.getValue(candidates[j])
+                if (a.first <= b.second && b.first <= a.second) {
+                    return "Periode payroll ${candidates[i]} bertumpang tindih dengan ${candidates[j]} dalam file impor."
+                }
+            }
+        }
+
+        val existingPayrolls = existingTransactions.filter(::isSettledPayrollTransaction)
+        for (candidate in candidates) {
+            val requested = candidateRanges.getValue(candidate)
+            for (prior in existingPayrolls) {
+                val priorPeriod = payrollPeriodFromReceipt(prior.receiptNo)
+                    ?: return "Bukti payroll lama ${prior.receiptNo} tidak memiliki periode yang valid; audit histori payroll sebelum melanjutkan."
+                val priorRange = runCatching { payrollPeriodRange(priorPeriod) }.getOrElse {
+                    return "Bukti payroll lama ${prior.receiptNo} memiliki periode yang tidak valid; audit histori payroll sebelum melanjutkan."
+                }
+                if (requested.first <= priorRange.second && priorRange.first <= requested.second) {
+                    return "Periode payroll ${candidate} bertumpang tindih dengan payroll ${priorPeriod} yang sudah ada. Impor/pencairan dibatalkan untuk mencegah pembayaran ganda."
+                }
+            }
+        }
+        return null
+    }
+
     private suspend fun paidPayrollCoveringDate(date: String): TransactionEntity? {
         val payrollTransactions = (transactionDao.getAllActiveTransactions().first() + transactionDao.getArchivedTransactions().first())
-            .filter { it.category == "Gaji" && it.status == "Selesai" && it.receiptNo.startsWith("PAYROLL-") }
+            .filter(::isSettledPayrollTransaction)
         return payrollTransactions.firstOrNull { payrollTx ->
-            val paidPeriod = payrollTx.receiptNo.removePrefix("PAYROLL-")
-            val range = runCatching { payrollPeriodRange(paidPeriod) }.getOrNull()
+            val paidPeriod = payrollPeriodFromReceipt(payrollTx.receiptNo)
+            val range = paidPeriod?.let { runCatching { payrollPeriodRange(it) }.getOrNull() }
             range != null && date >= range.first && date <= range.second
         }
     }
@@ -916,18 +966,12 @@ class KasRepository(
             require(accountDao.getAccountByName(accountName)?.isActive == true) {
                 "Akun pembayaran " + accountName + " tidak terdaftar atau nonaktif."
             }
-            val previousPayrolls = (transactionDao.getAllActiveTransactions().first() + transactionDao.getArchivedTransactions().first())
-                .filter { it.category == "Gaji" && it.status == "Selesai" && it.receiptNo.startsWith("PAYROLL-") }
-            val overlappingPayroll = previousPayrolls.firstOrNull { previous ->
-                val previousPeriod = previous.receiptNo.removePrefix("PAYROLL-")
-                val previousRange = runCatching { payrollPeriodRange(previousPeriod) }.getOrNull()
-                previousRange != null &&
-                    requestedPayrollRange.first <= previousRange.second &&
-                    previousRange.first <= requestedPayrollRange.second
-            }
-            require(overlappingPayroll == null) {
-                "Periode payroll $period bertumpang tindih dengan payroll ${overlappingPayroll?.receiptNo?.removePrefix("PAYROLL-")} yang sudah dicairkan. Untuk mencegah pembayaran ganda, pencairan dibatalkan."
-            }
+            val existingLedger = (
+                transactionDao.getAllActiveTransactions().first() +
+                    transactionDao.getArchivedTransactions().first()
+                ).distinctBy { it.id }
+            val conflict = payrollPeriodConflict(listOf(period), existingLedger)
+            require(conflict == null) { conflict ?: "Payroll bertumpang tindih dengan periode yang sudah dibayar." }
             val now = Date()
             var firstId = ""
             allocationsByProject.toSortedMap().forEach { (projectName, amount) ->
@@ -1146,7 +1190,7 @@ class KasRepository(
             val realization = settledExpenses.filter {
                 (it.date.startsWith(budget.period) || budget.period.equals("All", ignoreCase = true)) &&
                         it.fundBucket.equals(budget.fundBucket, ignoreCase = true) &&
-                        (budget.project.isBlank() || it.project.equals(budget.project, ignoreCase = true)) &&
+                        (if (budget.project.isBlank()) it.project.isBlank() else it.project.equals(budget.project, ignoreCase = true)) &&
                         it.allocation.equals(budget.category, ignoreCase = true)
             }.sumOf { it.amount }
 
@@ -2280,12 +2324,14 @@ class KasRepository(
                 "Kolom wajib spreadsheet tidak lengkap: " + missingHeaders.joinToString(", ") + "."
             }
 
-            val existingIds = (
+            val existingTransactions = (
                 transactionDao.getAllActiveTransactions().first() +
                     transactionDao.getArchivedTransactions().first()
-                ).map { it.id }.toSet()
+                ).distinctBy { it.id }
+            val existingIds = existingTransactions.map { it.id }.toSet()
             val txList = mutableListOf<TransactionEntity>()
             val seenIds = mutableSetOf<String>()
+            val importedPayrollPeriods = linkedSetOf<String>()
             val linkedPaymentsByReceivable = linkedMapOf<String, Double>()
             val errors = mutableListOf<String>()
 
@@ -2308,23 +2354,39 @@ class KasRepository(
                     }
                     require(seenIds.add(id)) { "ID " + id + " muncul lebih dari sekali dalam file." }
 
-                    val type = cell(row, "Tipe", "Type").uppercase(Locale.getDefault())
-                    val date = cell(row, "Tanggal", "Date")
-                    val time = cell(row, "Jam", "Time")
-                    val account = cell(row, "Akun", "Account")
-                    val toAccount = cell(row, "Ke Akun", "Akun Tujuan", "To Account").takeIf { it.isNotBlank() }
-                    val name = cell(row, "Nama Transaksi", "Nama", "Transaction Name")
-                    val category = cell(row, "Kategori", "Category")
+                    val type = cell(row, "Tipe", "Type").trim().uppercase(Locale.ROOT)
+                    val date = cell(row, "Tanggal", "Date").trim()
+                    val time = cell(row, "Jam", "Time").trim()
+                    val account = cell(row, "Akun", "Account").trim()
+                    val toAccount = cell(row, "Ke Akun", "Akun Tujuan", "To Account").trim().takeIf { it.isNotBlank() }
+                    val name = cell(row, "Nama Transaksi", "Nama", "Transaction Name").trim()
+                    val rawCategory = cell(row, "Kategori", "Category").trim()
+                    val category = when {
+                        rawCategory.equals("Gaji", ignoreCase = true) -> "Gaji"
+                        rawCategory.equals("Piutang Masuk", ignoreCase = true) -> "Piutang Masuk"
+                        rawCategory.equals("Belanja Barang", ignoreCase = true) -> "Belanja Barang"
+                        else -> rawCategory
+                    }
                     val description = cell(row, "Keterangan", "Description")
                     val amount = parseSpreadsheetAmount(cell(row, "Nominal", "Amount"))
-                    val allocation = cell(row, "Alokasi", "Allocation")
-                    val pic = cell(row, "PIC")
-                    val proofUrl = cell(row, "Bukti", "Proof")
-                    val receiptNo = cell(row, "No Bukti", "Receipt No")
-                    val project = cell(row, "Proyek", "Project")
+                    val allocation = cell(row, "Alokasi", "Allocation").trim()
+                    val pic = cell(row, "PIC").trim()
+                    val proofUrl = cell(row, "Bukti", "Proof").trim()
+                    val rawReceiptNo = cell(row, "No Bukti", "Receipt No").trim()
+                    val receiptNo = when {
+                        rawReceiptNo.startsWith("PAYROLL-", ignoreCase = true) -> "PAYROLL-" + rawReceiptNo.substring("PAYROLL-".length).trim()
+                        rawReceiptNo.startsWith("PIU-", ignoreCase = true) -> "PIU-" + rawReceiptNo.substring(4).trim()
+                        rawReceiptNo.startsWith("HUT-", ignoreCase = true) -> "HUT-" + rawReceiptNo.substring(4).trim()
+                        else -> rawReceiptNo
+                    }
+                    val project = cell(row, "Proyek", "Project").trim()
                     val note = cell(row, "Catatan", "Note")
-                    val status = cell(row, "Status")
-                    val fundBucket = cell(row, "Kelompok Dana", "Fund Bucket").ifBlank { "PT" }
+                    val rawStatus = cell(row, "Status").trim()
+                    val status = listOf("Selesai", "Draft", "Pending", "Batal", "Dihapus")
+                        .firstOrNull { it.equals(rawStatus, ignoreCase = true) } ?: rawStatus
+                    val rawFundBucket = cell(row, "Kelompok Dana", "Fund Bucket").trim().ifBlank { "PT" }
+                    val fundBucket = listOf("PT", "Perdagangan", "Dana Talang", "Pribadi", "Darurat")
+                        .firstOrNull { it.equals(rawFundBucket, ignoreCase = true) } ?: rawFundBucket
                     val inputTimeRaw = cell(row, "Waktu Input", "Input Time")
                     val inputTime = if (inputTimeRaw.isBlank()) System.currentTimeMillis() else parseSpreadsheetTimestamp(inputTimeRaw)
                     val inputBy = cell(row, "Input Oleh", "Input By").ifBlank { "Spreadsheet Import" }
@@ -2363,11 +2425,12 @@ class KasRepository(
                     )
                     when {
                         receiptNo.startsWith("PAYROLL-", ignoreCase = true) -> {
-                            require(type == "KELUAR" && category.equals("Gaji", ignoreCase = true) && status == "Selesai") {
+                            require(type == "KELUAR" && category.equals("Gaji", ignoreCase = true) && status.equals("Selesai", ignoreCase = true)) {
                                 "Baris payroll harus bertipe KELUAR, kategori Gaji, dan status Selesai."
                             }
-                            val payrollPeriod = receiptNo.substring("PAYROLL-".length)
+                            val payrollPeriod = receiptNo.substring("PAYROLL-".length).trim()
                             payrollPeriodRange(payrollPeriod)
+                            importedPayrollPeriods += payrollPeriod
                         }
                         receiptNo.startsWith("PIU-", ignoreCase = true) -> {
                             require(type == "MASUK" && category.equals("Piutang Masuk", ignoreCase = true) && status == "Selesai") {
@@ -2407,6 +2470,9 @@ class KasRepository(
                 )
             }
 
+            val preflightPayrollConflict = payrollPeriodConflict(importedPayrollPeriods, existingTransactions)
+            require(preflightPayrollConflict == null) { preflightPayrollConflict ?: "Periode payroll bertumpang tindih." }
+
             database.withTransaction {
                 val transactionsBeforeImport = (
                     transactionDao.getAllActiveTransactions().first() +
@@ -2415,6 +2481,10 @@ class KasRepository(
                 val idsNow = transactionsBeforeImport.map { it.id }.toSet()
                 require(txList.none { it.id in idsNow }) {
                     "Salah satu ID transaksi sudah masuk saat proses impor berjalan. Tidak ada data yang diimpor."
+                }
+                val concurrentPayrollConflict = payrollPeriodConflict(importedPayrollPeriods, transactionsBeforeImport)
+                require(concurrentPayrollConflict == null) {
+                    concurrentPayrollConflict ?: "Periode payroll bertumpang tindih dengan periode yang sudah dibayar."
                 }
 
                 linkedPaymentsByReceivable.forEach { (receivableId, amount) ->
