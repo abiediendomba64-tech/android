@@ -1566,7 +1566,7 @@ class KasRepository(
         }
     }
 
-    suspend fun exportDataToJson(): String {
+    suspend fun exportDataToJson(): String = database.withTransaction {
         val transactions = transactionDao.getAllActiveTransactions().first()
         val accounts = accountDao.getAllAccounts().first()
         val budgets = budgetDao.getAllBudgets().first()
@@ -2066,17 +2066,32 @@ class KasRepository(
             }
 
             database.withTransaction {
-                val existingAccountIds = accountDao.getAllAccounts().first().map { it.id }.toSet()
-                val existingTransactionIds = (transactionDao.getAllActiveTransactions().first() + transactionDao.getArchivedTransactions().first()).map { it.id }.toSet()
-                val existingReceivableIds = receivableDao.getAllReceivables().first().map { it.id }.toSet()
-                val existingEmployeeIds = employeeDao.getAllEmployees().first().map { it.id }.toSet()
-                val existingAttendanceIds = attendanceDao.getAllAttendances().first().map { it.id }.toSet()
-                val existingReconIds = bankReconDao.getAllReconciliations().first().map { it.id }.toSet()
-                val existingBudgetIds = budgetDao.getAllBudgets().first().map { it.id }.filter { it != 0L }.toSet()
-                val existingNoteIds = noteDao.getAllNotes().first().map { it.id }.filter { it != 0L }.toSet()
-                val existingProjectIds = projectDao.getAllProjects().first().map { it.id }.toSet()
-                val existingPlanIds = projectPlanDao.getAllPlans().first().map { it.id }.toSet()
-                val existingUnitIds = housingUnitDao.getAllUnits().first().map { it.id }.toSet()
+                val existingAccounts = accountDao.getAllAccounts().first()
+                val existingTransactions = (
+                    transactionDao.getAllActiveTransactions().first() +
+                        transactionDao.getArchivedTransactions().first()
+                    ).distinctBy { it.id }
+                val existingReceivables = receivableDao.getAllReceivables().first()
+                val existingEmployees = employeeDao.getAllEmployees().first()
+                val existingAttendances = attendanceDao.getAllAttendances().first()
+                val existingReconciliations = bankReconDao.getAllReconciliations().first()
+                val existingBudgets = budgetDao.getAllBudgets().first()
+                val existingNotes = noteDao.getAllNotes().first()
+                val existingProjects = projectDao.getAllProjects().first()
+                val existingPlans = projectPlanDao.getAllPlans().first()
+                val existingUnits = housingUnitDao.getAllUnits().first()
+
+                val existingAccountIds = existingAccounts.map { it.id }.toSet()
+                val existingTransactionIds = existingTransactions.map { it.id }.toSet()
+                val existingReceivableIds = existingReceivables.map { it.id }.toSet()
+                val existingEmployeeIds = existingEmployees.map { it.id }.toSet()
+                val existingAttendanceIds = existingAttendances.map { it.id }.toSet()
+                val existingReconIds = existingReconciliations.map { it.id }.toSet()
+                val existingBudgetIds = existingBudgets.map { it.id }.filter { it != 0L }.toSet()
+                val existingNoteIds = existingNotes.map { it.id }.filter { it != 0L }.toSet()
+                val existingProjectIds = existingProjects.map { it.id }.toSet()
+                val existingPlanIds = existingPlans.map { it.id }.toSet()
+                val existingUnitIds = existingUnits.map { it.id }.toSet()
 
                 require(accounts.map { it.id }.distinct().size == accounts.size) { "Backup memiliki ID akun duplikat." }
                 require(accounts.none { it.id in existingAccountIds }) { "Backup memiliki ID akun yang sudah ada di database." }
@@ -2090,7 +2105,13 @@ class KasRepository(
                 require(attendances.none { it.id in existingAttendanceIds }) { "Backup memiliki ID absensi yang sudah ada di database." }
                 require(recons.map { it.id }.distinct().size == recons.size) { "Backup memiliki ID rekonsiliasi duplikat." }
                 require(recons.none { it.id in existingReconIds }) { "Backup memiliki ID rekonsiliasi yang sudah ada di database." }
+                require(budgets.filter { it.id != 0L }.map { it.id }.distinct().size == budgets.count { it.id != 0L }) {
+                    "Backup memiliki ID anggaran duplikat."
+                }
                 require(budgets.all { it.id == 0L || it.id !in existingBudgetIds }) { "Backup memiliki ID anggaran yang sudah ada di database." }
+                require(notes.filter { it.id != 0L }.map { it.id }.distinct().size == notes.count { it.id != 0L }) {
+                    "Backup memiliki ID catatan duplikat."
+                }
                 require(notes.all { it.id == 0L || it.id !in existingNoteIds }) { "Backup memiliki ID catatan yang sudah ada di database." }
                 require(projects.map { it.id }.distinct().size == projects.size) { "Backup memiliki ID proyek duplikat." }
                 require(projects.none { it.id in existingProjectIds }) { "Backup memiliki ID proyek yang sudah ada di database." }
@@ -2104,12 +2125,206 @@ class KasRepository(
                     require(account.name.isNotBlank()) { "Backup memiliki akun tanpa nama." }
                     require(account.type in setOf("Kas", "Bank", "E-Wallet", "Lainnya")) { "Backup memiliki jenis akun tidak valid: ${account.type}." }
                     require(account.initialBalance.isFinite() && account.initialBalance >= 0.0) { "Backup memiliki saldo awal akun tidak valid: ${account.name}." }
-                    val key = account.name.trim().lowercase(Locale.getDefault())
+                    val key = account.name.trim().lowercase(Locale.ROOT)
                     require(seenAccountNames.add(key)) { "Backup memiliki nama akun duplikat: ${account.name}." }
                     val existing = accountDao.getAccountByName(account.name)
                     require(existing == null || existing.id == account.id) { "Backup bentrok dengan nama akun yang sudah dipakai: ${account.name}." }
                 }
-                accounts.forEach { accountDao.insertAccount(it.copy(name = it.name.trim())) }
+
+                fun normalizedKey(value: String): String = value.trim().lowercase(Locale.ROOT)
+                fun budgetScope(period: String, category: String, project: String, fundBucket: String): String =
+                    listOf(period, category, project, fundBucket).joinToString("|") { normalizedKey(it) }
+                fun unitScope(project: String, code: String): String =
+                    normalizedKey(project) + "|" + normalizedKey(code)
+                fun attendanceScope(employeeId: String, date: String): String =
+                    normalizedKey(employeeId) + "|" + date
+                fun reconciliationScope(accountName: String, period: String): String =
+                    normalizedKey(accountName) + "|" + period
+
+                val allProjectRows = existingProjects + projects
+                val allAccountRows = existingAccounts + accounts
+                val allEmployeeRows = existingEmployees + employees
+                val allReceivableRows = existingReceivables + receivables
+                val projectNameKeys = allProjectRows.map { normalizedKey(it.name) }
+                require(projectNameKeys.distinct().size == projectNameKeys.size) {
+                    "Backup atau database tujuan memiliki nama proyek duplikat."
+                }
+                require(projects.none { incoming ->
+                    existingProjects.any { normalizedKey(it.name) == normalizedKey(incoming.name) }
+                }) { "Backup bentrok dengan nama proyek yang sudah ada di database." }
+
+                val budgetScopes = budgets.map { budgetScope(it.period, it.category, it.project, it.fundBucket) }
+                require(budgetScopes.distinct().size == budgetScopes.size) {
+                    "Backup memiliki cakupan anggaran duplikat (periode/kategori/proyek/kelompok dana)."
+                }
+                require(budgets.none { incoming ->
+                    existingBudgets.any {
+                        budgetScope(it.period, it.category, it.project, it.fundBucket) ==
+                            budgetScope(incoming.period, incoming.category, incoming.project, incoming.fundBucket)
+                    }
+                }) { "Backup bentrok dengan cakupan anggaran yang sudah ada; gabungkan atau hapus duplikasi lebih dahulu." }
+
+                val unitScopes = housingUnits.map { unitScope(it.project, it.unitCode) }
+                require(unitScopes.distinct().size == unitScopes.size) {
+                    "Backup memiliki kode unit duplikat dalam proyek yang sama."
+                }
+                require(housingUnits.none { incoming ->
+                    existingUnits.any { unitScope(it.project, it.unitCode) == unitScope(incoming.project, incoming.unitCode) }
+                }) { "Backup bentrok dengan kode unit yang sudah ada di database." }
+
+                val attendanceScopes = attendances.map { attendanceScope(it.employeeId, it.date) }
+                require(attendanceScopes.distinct().size == attendanceScopes.size) {
+                    "Backup memiliki lebih dari satu absensi untuk karyawan pada tanggal yang sama."
+                }
+                require(attendances.none { incoming ->
+                    existingAttendances.any { attendanceScope(it.employeeId, it.date) == attendanceScope(incoming.employeeId, incoming.date) }
+                }) { "Backup bentrok dengan absensi karyawan/tanggal yang sudah ada di database." }
+
+                val reconciliationScopes = recons.map { reconciliationScope(it.accountName, it.period) }
+                require(reconciliationScopes.distinct().size == reconciliationScopes.size) {
+                    "Backup memiliki lebih dari satu rekonsiliasi untuk akun dan bulan yang sama."
+                }
+                require(recons.none { incoming ->
+                    existingReconciliations.any { reconciliationScope(it.accountName, it.period) == reconciliationScope(incoming.accountName, incoming.period) }
+                }) { "Backup bentrok dengan rekonsiliasi akun/bulan yang sudah ada." }
+
+                val accountNameKeys = allAccountRows.map { normalizedKey(it.name) }
+                val employeeIdSet = allEmployeeRows.map { it.id }.toSet()
+                val projectByName = allProjectRows.associateBy { normalizedKey(it.name) }
+                val receivableById = allReceivableRows.associateBy { it.id }
+
+                housingUnits.forEach { unit ->
+                    val project = projectByName[normalizedKey(unit.project)]
+                        ?: throw IllegalArgumentException("Proyek unit backup tidak ditemukan: ${unit.project}")
+                    require(project.category == "Perumahan") { "Unit backup harus terkait dengan master proyek perumahan." }
+                    require(unit.businessModel in setOf("Subsidi", "Komersial") && unit.businessModel == project.businessModel) {
+                        "Segmen unit backup berbeda dari segmen proyek."
+                    }
+                    require(unit.status in setOf("Tersedia", "Booking", "Terjual", "Dibatalkan")) { "Status unit backup tidak valid." }
+                    require(unit.status != "Terjual" || unit.buyerName.isNotBlank()) { "Nama pembeli wajib diisi untuk unit terjual." }
+                    require(unit.landAreaM2.isFinite() && unit.landAreaM2 > 0.0 &&
+                        unit.buildingAreaM2.isFinite() && unit.buildingAreaM2 >= 0.0 &&
+                        unit.salePrice.isFinite() && unit.salePrice > 0.0) { "Ukuran atau harga unit backup tidak valid." }
+                }
+                budgets.forEach { budget ->
+                    require(budget.period.equals("All", ignoreCase = true) ||
+                        budget.period.matches(Regex("""\d{4}-\d{2}"""))) { "Backup memiliki periode anggaran tidak valid." }
+                    if (!budget.period.equals("All", ignoreCase = true)) periodEndDate(budget.period)
+                    require(budget.category.isNotBlank()) { "Backup memiliki kategori anggaran kosong." }
+                    require(budget.budgetAmount.isFinite() && budget.budgetAmount >= 0.0) { "Backup memiliki nominal anggaran tidak valid." }
+                    require(budget.fundBucket in setOf("PT", "Perdagangan", "Dana Talang", "Pribadi", "Darurat")) { "Kelompok dana anggaran backup tidak valid." }
+                    require(budget.project.isBlank() || normalizedKey(budget.project) in projectByName) { "Proyek anggaran backup tidak ditemukan: ${budget.project}" }
+                }
+                receivables.forEach { item ->
+                    require(item.type in setOf("PIUTANG", "HUTANG")) { "Jenis tagihan backup tidak valid." }
+                    requireIsoDate(item.date, "Tanggal tagihan backup")
+                    requireIsoDate(item.dueDate, "Jatuh tempo backup")
+                    require(item.totalAmount.isFinite() && item.totalAmount > 0.0 &&
+                        item.paidAmount.isFinite() && item.paidAmount >= 0.0 && item.paidAmount <= item.totalAmount) {
+                        "Nominal tagihan backup tidak valid: ${item.id}."
+                    }
+                    require(allAccountRows.count { normalizedKey(it.name) == normalizedKey(item.targetAccount) } == 1) {
+                        "Akun tagihan backup tidak ditemukan atau tidak unik: ${item.targetAccount}."
+                    }
+                    require(item.fundBucket in setOf("PT", "Perdagangan", "Dana Talang", "Pribadi", "Darurat")) { "Kelompok dana tagihan backup tidak valid." }
+                    require(item.project.isBlank() || normalizedKey(item.project) in projectByName) { "Proyek tagihan backup tidak ditemukan: ${item.project}" }
+                }
+                employees.forEach { employee ->
+                    require(employee.name.isNotBlank() && employee.dailyRate.isFinite() && employee.dailyRate >= 0.0 &&
+                        employee.monthlySalary.isFinite() && employee.monthlySalary >= 0.0) {
+                        "Data atau nominal karyawan backup tidak valid: ${employee.id}."
+                    }
+                    require(employee.defaultProject.isBlank() || normalizedKey(employee.defaultProject) in projectByName) {
+                        "Proyek alokasi karyawan backup tidak ditemukan: ${employee.defaultProject}"
+                    }
+                }
+                attendances.forEach { attendance ->
+                    require(attendance.employeeId in employeeIdSet) { "Absensi backup menunjuk karyawan yang tidak ada: ${attendance.employeeId}" }
+                    requireIsoDate(attendance.date, "Tanggal absensi backup")
+                    require(attendance.status in setOf("Hadir", "Izin", "Sakit", "Alpa", "Cuti")) { "Status absensi backup tidak valid." }
+                    require(attendance.overtimeHours.isFinite() && attendance.overtimeHours >= 0.0 &&
+                        attendance.dailyAllowance.isFinite() && attendance.dailyAllowance >= 0.0) { "Nilai lembur/tunjangan backup tidak valid." }
+                    require(attendance.project.isBlank() || normalizedKey(attendance.project) in projectByName) { "Proyek absensi backup tidak ditemukan: ${attendance.project}" }
+                }
+                projectPlans.forEach { plan ->
+                    requireIsoDate(plan.planDate, "Tanggal rencana backup")
+                    require(plan.title.isNotBlank() && plan.estimatedAmount.isFinite() && plan.estimatedAmount >= 0.0) {
+                        "Data rencana backup tidak valid: ${plan.id}."
+                    }
+                    require(plan.status in setOf("Direncanakan", "Selesai", "Batal")) { "Status rencana backup tidak valid." }
+                    require(plan.project.isBlank() || normalizedKey(plan.project) in projectByName) { "Proyek rencana backup tidak ditemukan: ${plan.project}" }
+                }
+                notes.forEach { note ->
+                    requireIsoDate(note.date, "Tanggal catatan backup")
+                    require(note.title.isNotBlank() && note.priority in setOf("Rendah", "Sedang", "Tinggi") &&
+                        note.status in setOf("Open", "Done", "Follow Up")) { "Data catatan backup tidak valid: ${note.id}." }
+                    require(note.project.isBlank() || normalizedKey(note.project) in projectByName) { "Proyek catatan backup tidak ditemukan: ${note.project}" }
+                }
+                recons.forEach { recon ->
+                    require(recon.period.matches(Regex("""\d{4}-\d{2}"""))) { "Periode rekonsiliasi backup tidak valid: ${recon.period}." }
+                    periodEndDate(recon.period)
+                    require(recon.statementBalance.isFinite() && recon.statementBalance >= 0.0) { "Saldo rekening koran backup tidak valid." }
+                    require(allAccountRows.count { normalizedKey(it.name) == normalizedKey(recon.accountName) } == 1) {
+                        "Akun rekonsiliasi backup tidak ditemukan atau tidak unik: ${recon.accountName}."
+                    }
+                }
+                transactions.forEach { tx ->
+                    require(tx.account.isNotBlank() && allAccountRows.count { normalizedKey(it.name) == normalizedKey(tx.account) } == 1) {
+                        "Akun transaksi backup tidak ditemukan atau tidak unik: ${tx.account}."
+                    }
+                    if (tx.type == "TRANSFER") require(tx.toAccount?.let { to -> allAccountRows.count { normalizedKey(it.name) == normalizedKey(to) } == 1 } == true) {
+                        "Akun tujuan transfer backup tidak ditemukan atau tidak unik: ${tx.toAccount}."
+                    }
+                    require(tx.project.isBlank() || normalizedKey(tx.project) in projectByName) {
+                        "Proyek transaksi backup tidak ditemukan: ${tx.project}"
+                    }
+                    val receipt = tx.receiptNo.trim()
+                    when {
+                        receipt.startsWith("PAYROLL-", ignoreCase = true) -> {
+                            require(tx.type == "KELUAR" && tx.category.equals("Gaji", ignoreCase = true) &&
+                                tx.status.equals("Selesai", ignoreCase = true)) {
+                                "Transaksi payroll backup harus KELUAR/Gaji/Selesai."
+                            }
+                            payrollPeriodRange(receipt.substring("PAYROLL-".length).trim())
+                        }
+                        receipt.startsWith("PIU-", ignoreCase = true) -> {
+                            val id = receipt.substring(4).trim()
+                            val item = receivableById[id] ?: throw IllegalArgumentException("Pembayaran backup ${receipt} tidak memiliki master piutang di dalam restore.")
+                            require(item.type == "PIUTANG" && tx.type == "MASUK" &&
+                                tx.category.equals("Piutang Masuk", ignoreCase = true) && tx.status.equals("Selesai", ignoreCase = true)) {
+                                "Relasi pembayaran PIUTANG backup tidak konsisten: ${receipt}."
+                            }
+                        }
+                        receipt.startsWith("HUT-", ignoreCase = true) -> {
+                            val id = receipt.substring(4).trim()
+                            val item = receivableById[id] ?: throw IllegalArgumentException("Pembayaran backup ${receipt} tidak memiliki master hutang di dalam restore.")
+                            require(item.type == "HUTANG" && tx.type == "KELUAR" &&
+                                tx.category.equals("Belanja Barang", ignoreCase = true) && tx.status.equals("Selesai", ignoreCase = true)) {
+                                "Relasi pembayaran HUTANG backup tidak konsisten: ${receipt}."
+                            }
+                        }
+                    }
+                }
+                val importedPayrollPeriods = transactions.mapNotNull { tx ->
+                    payrollPeriodFromReceipt(tx.receiptNo).takeIf { isSettledPayrollTransaction(tx) }
+                }
+                val payrollConflict = payrollPeriodConflict(importedPayrollPeriods, existingTransactions)
+                require(payrollConflict == null) { payrollConflict ?: "Periode payroll backup bertumpang tindih." }
+                receivables.forEach { item ->
+                    val prefix = if (item.type == "PIUTANG") "PIU-" else "HUT-"
+                    val expectedCategory = if (item.type == "PIUTANG") "Piutang Masuk" else "Belanja Barang"
+                    val expectedType = if (item.type == "PIUTANG") "MASUK" else "KELUAR"
+                    val linkedTotal = transactions.filter {
+                        it.receiptNo.equals(prefix + item.id, ignoreCase = true) &&
+                            it.category.equals(expectedCategory, ignoreCase = true) &&
+                            it.type == expectedType && it.status.equals("Selesai", ignoreCase = true)
+                    }.sumOf { it.amount }
+                    require(kotlin.math.abs(linkedTotal - item.paidAmount) <= 0.01) {
+                        "Pembayaran master ${item.id} tidak sama dengan ledger pada backup."
+                    }
+                }
+
+                accounts.forEach { accountDao.insertAccount(it.copy(name = account.name.trim())) }
 
                 projects.forEach { project ->
                     require(project.name.isNotBlank()) { "Backup memiliki proyek tanpa nama." }
