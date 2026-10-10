@@ -1638,6 +1638,11 @@ class KasRepository(
             if (item.status !in setOf("Belum Jatuh Tempo", "Jatuh Tempo", "Lunas")) issues += "Tagihan ${item.id}: status tidak valid."
             if (!item.totalAmount.isFinite() || item.totalAmount <= 0.0) issues += "${item.type} ${item.id}: total nominal tidak valid."
             if (!item.paidAmount.isFinite() || item.paidAmount < 0.0 || item.paidAmount > item.totalAmount) issues += "${item.type} ${item.id}: paidAmount tidak valid."
+            if (item.totalAmount.isFinite() && item.totalAmount > 0.0 &&
+                item.paidAmount.isFinite() && item.paidAmount >= 0.0 && item.paidAmount <= item.totalAmount &&
+                ((item.paidAmount >= item.totalAmount) != (item.status == "Lunas"))) {
+                issues += "${item.type} ${item.id}: status Lunas tidak konsisten dengan paidAmount/totalAmount."
+            }
             if (key(item.targetAccount) !in accountNames) issues += "${item.type} ${item.id}: akun terkait tidak terdaftar."
             if (item.fundBucket !in validFundBuckets) issues += "${item.type} ${item.id}: kelompok dana tidak valid."
             if (item.project.isNotBlank() && projects != null && projectKeys.none { it == key(item.project) }) {
@@ -2440,6 +2445,15 @@ class KasRepository(
                     require(item.totalAmount.isFinite() && item.totalAmount > 0.0 &&
                         item.paidAmount.isFinite() && item.paidAmount >= 0.0 && item.paidAmount <= item.totalAmount) {
                         "Nominal tagihan backup tidak valid: ${item.id}."
+                    }
+                    require(item.customerName.isNotBlank()) {
+                        "Backup memiliki tagihan tanpa nama pihak: ${item.id}."
+                    }
+                    require(item.status in setOf("Belum Jatuh Tempo", "Jatuh Tempo", "Lunas")) {
+                        "Status tagihan backup tidak valid: ${item.id}."
+                    }
+                    require(item.paidAmount >= item.totalAmount || item.status != "Lunas") {
+                        "Status tagihan backup Lunas tidak sesuai karena pembayaran belum mencapai total: ${item.id}."
                     }
                     require(allAccountRows.count { normalizedKey(it.name) == normalizedKey(item.targetAccount) } == 1) {
                         "Akun tagihan backup tidak ditemukan atau tidak unik: ${item.targetAccount}."

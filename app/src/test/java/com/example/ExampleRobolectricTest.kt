@@ -2349,6 +2349,71 @@ class ExampleRobolectricTest {
     }
 
     @Test
+    fun integrityAuditDetectsReceivableStatusNotMatchingPaymentAmount() = runBlocking {
+        db.accountDao().insertAccount(AccountEntity("acc-receivable-status", "Kas Status Tagihan", "Kas", 0.0))
+        db.receivableDao().insertReceivable(
+            com.example.data.model.ReceivableEntity(
+                id = "PIU-STATUS-INVALID",
+                type = "PIUTANG",
+                date = "2026-10-01",
+                customerName = "Pelanggan Status",
+                description = "Status tidak cocok",
+                totalAmount = 500000.0,
+                dueDate = "2026-10-31",
+                paidAmount = 0.0,
+                targetAccount = "Kas Status Tagihan",
+                notes = "",
+                status = "Lunas"
+            )
+        )
+
+        val result = repository.runCurrentIntegrityAudit().result
+        assertFalse(result.passed)
+        assertTrue(result.issues.any {
+            it.contains("PIU-STATUS-INVALID") && it.contains("paidAmount/totalAmount")
+        })
+    }
+
+    @Test
+    fun restoreRejectsUnpaidReceivableMarkedLunasBeforeAnyDatabaseWrite() = runBlocking {
+        val backup = """
+            {
+              "accounts": [{
+                "id": "restore-status-account",
+                "name": "Kas Restore Status",
+                "type": "Kas",
+                "initialBalance": 0,
+                "colorHex": "#1E56A0",
+                "isActive": true
+              }],
+              "transactions": [],
+              "receivables": [{
+                "id": "PIU-RESTORE-STATUS",
+                "type": "PIUTANG",
+                "date": "2026-10-01",
+                "customerName": "Pelanggan Restore Status",
+                "description": "Status tidak cocok",
+                "totalAmount": 500000,
+                "dueDate": "2026-10-31",
+                "paidAmount": 0,
+                "targetAccount": "Kas Restore Status",
+                "notes": "",
+                "status": "Lunas",
+                "project": "",
+                "fundBucket": "PT"
+              }]
+            }
+        """.trimIndent()
+
+        val result = repository.restoreDataFromJson(backup)
+        assertFalse(result.isSuccess)
+        assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("status tagihan backup Lunas", ignoreCase = true))
+        assertNull(db.accountDao().getAccountById("restore-status-account"))
+        assertNull(db.receivableDao().getReceivableById("PIU-RESTORE-STATUS"))
+    }
+
+
+    @Test
     fun integrityAuditInspectsNotesAndReconciliationLedgerConsistency() = runBlocking {
         db.accountDao().insertAccount(AccountEntity("acc-audit-full", "Kas Audit Lengkap", "Kas", 1000000.0))
         db.noteDao().insertNote(CashNoteEntity(
