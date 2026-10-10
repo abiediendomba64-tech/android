@@ -259,7 +259,7 @@ fun AnggaranScreen(
                                 (it.date.startsWith(item.budget.period) || item.budget.period.equals("All", ignoreCase = true)) &&
                                 it.allocation.equals(item.budget.category, ignoreCase = true) &&
                                 it.fundBucket.equals(item.budget.fundBucket, ignoreCase = true) &&
-                                (item.budget.project.isBlank() || it.project.equals(item.budget.project, ignoreCase = true))
+                                (if (item.budget.project.isBlank()) it.project.isBlank() else it.project.equals(item.budget.project, ignoreCase = true))
                     }
 
                     Card(
