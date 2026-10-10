@@ -2351,7 +2351,7 @@ class KasRepository(
                 val allEmployeeRows = existingEmployees + employees
                 val projectNameKeys = allProjectRows.map { normalizedKey(it.name) }
                 require(projectNameKeys.none { it.isBlank() } && projectNameKeys.distinct().size == projectNameKeys.size) {
-                    "Backup atau database tujuan memiliki nama proyek kosong/duplikat."
+                    "Backup atau database tujuan memiliki nama proyek duplikat atau kosong."
                 }
                 require(projects.none { incoming ->
                     existingProjects.any { normalizedKey(it.name) == normalizedKey(incoming.name) }
