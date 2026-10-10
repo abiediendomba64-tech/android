@@ -1510,6 +1510,13 @@ class KasRepository(
         if (projects != null && projectKeys.distinct().size != projectKeys.size) {
             issues += "Nama proyek duplikat; hubungan transaksi, unit, anggaran, dan kalender ambigu."
         }
+        if (accounts.map { it.id }.distinct().size != accounts.size) issues += "ID akun duplikat dalam snapshot."
+        if (budgets.filter { it.id != 0L }.map { it.id }.distinct().size != budgets.count { it.id != 0L }) issues += "ID anggaran duplikat dalam snapshot."
+        if (notes.filter { it.id != 0L }.map { it.id }.distinct().size != notes.count { it.id != 0L }) issues += "ID catatan duplikat dalam snapshot."
+        if (projectRows.map { it.id }.distinct().size != projectRows.size) issues += "ID proyek duplikat dalam snapshot."
+        if (projectPlans.map { it.id }.distinct().size != projectPlans.size) issues += "ID rencana kalender duplikat dalam snapshot."
+        if (housingUnits.map { it.id }.distinct().size != housingUnits.size) issues += "ID unit perumahan duplikat dalam snapshot."
+        if (bankReconciliations.map { it.id }.distinct().size != bankReconciliations.size) issues += "ID rekonsiliasi duplikat dalam snapshot."
         projectRows.forEach { project ->
             if (project.id.isBlank() || project.name.isBlank()) issues += "Master proyek memiliki ID/nama kosong."
             if (project.category !in setOf("Pembebasan Tanah", "Cut & Fill", "Perumahan", "Perdagangan", "Operasional PT", "Lainnya")) {
@@ -2339,7 +2346,6 @@ class KasRepository(
                 val allProjectRows = existingProjects + projects
                 val allAccountRows = existingAccounts + accounts
                 val allEmployeeRows = existingEmployees + employees
-                val allReceivableRows = existingReceivables + receivables
                 val projectNameKeys = allProjectRows.map { normalizedKey(it.name) }
                 require(projectNameKeys.distinct().size == projectNameKeys.size) {
                     "Backup atau database tujuan memiliki nama proyek duplikat."
@@ -2385,7 +2391,7 @@ class KasRepository(
 
                 val employeeIdSet = allEmployeeRows.map { it.id }.toSet()
                 val projectByName = allProjectRows.associateBy { normalizedKey(it.name) }
-                val receivableById = allReceivableRows.associateBy { it.id }
+                val receivableById = receivables.associateBy { it.id }
 
                 housingUnits.forEach { unit ->
                     val project = projectByName[normalizedKey(unit.project)]
