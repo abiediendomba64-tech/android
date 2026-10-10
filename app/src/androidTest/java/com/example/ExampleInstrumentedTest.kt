@@ -1,10 +1,12 @@
 package com.example
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
@@ -48,7 +50,11 @@ class ExampleInstrumentedTest {
         composeRule.onNodeWithTag("backup_restore_screen").assertIsDisplayed()
         composeRule.onNodeWithText("Simpan Backup JSON").assertIsDisplayed()
         composeRule.onNodeWithText("Pulihkan dari File Backup").assertIsDisplayed()
+        composeRule.onNodeWithTag("backup_restore_screen")
+            .performScrollToNode(hasTestTag("spreadsheet_export"))
         composeRule.onNodeWithTag("spreadsheet_export").assertIsDisplayed()
+        composeRule.onNodeWithTag("backup_restore_screen")
+            .performScrollToNode(hasTestTag("spreadsheet_import"))
         composeRule.onNodeWithTag("spreadsheet_import").assertIsDisplayed()
     }
 }
