@@ -2401,10 +2401,11 @@ class KasRepository(
             }
 
             database.withTransaction {
-                val idsNow = (
+                val transactionsBeforeImport = (
                     transactionDao.getAllActiveTransactions().first() +
                         transactionDao.getArchivedTransactions().first()
-                    ).map { it.id }.toSet()
+                    ).distinctBy { it.id }
+                val idsNow = transactionsBeforeImport.map { it.id }.toSet()
                 require(txList.none { it.id in idsNow }) {
                     "Salah satu ID transaksi sudah masuk saat proses impor berjalan. Tidak ada data yang diimpor."
                 }
@@ -2419,7 +2420,25 @@ class KasRepository(
                     val status = if (paid >= current.totalAmount) "Lunas" else current.status
                     receivableDao.updateReceivable(current.copy(paidAmount = paid, status = status))
                 }
-                if (txList.isNotEmpty()) transactionDao.insertTransactions(txList)
+                if (txList.isNotEmpty()) {
+                    transactionDao.insertTransactions(txList)
+                    val accountSnapshot = accountDao.getAllAccounts().first()
+                    val totalBalanceAfterImport = calculateAccountBalances(
+                        accountSnapshot,
+                        transactionsBeforeImport + txList
+                    ).sumOf { it.currentBalance }
+                    auditDao.insertAuditLog(
+                        AuditLogEntity(
+                            dateFormatted = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()),
+                            action = "IMPORT_TRANSACTIONS",
+                            recordId = generateId("CSV"),
+                            details = "Impor spreadsheet menambahkan ${txList.size} transaksi (${txList.minOf { it.date }} s/d ${txList.maxOf { it.date }}).",
+                            user = "Spreadsheet Import",
+                            verifiedFormulaStatus = "RECORDED",
+                            balanceAfter = totalBalanceAfterImport
+                        )
+                    )
+                }
             }
             Result.success(txList.size)
         } catch (ex: Exception) {
