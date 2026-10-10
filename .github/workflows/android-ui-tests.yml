@@ -38,4 +38,4 @@ jobs:
           arch: x86_64
           profile: pixel_2
           disable-animations: true
-          script: ./gradlew --no-daemon connectedDebugAndroidTest
+          script: gradle --no-daemon connectedDebugAndroidTest
