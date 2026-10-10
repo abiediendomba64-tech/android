@@ -2,19 +2,16 @@ name: Android Emulator UI Tests
 
 on:
   workflow_dispatch:
-  pull_request:
-    branches: ["main"]
 
 permissions:
   contents: read
 
 concurrency:
-  group: android-ui-tests-${{ github.event.pull_request.number || github.ref }}
+  group: android-ui-tests-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   emulator-ui-tests:
-    if: github.event_name == 'workflow_dispatch'
     name: Navigation, dates, and backup UI
     timeout-minutes: 30
     runs-on: ubuntu-24.04

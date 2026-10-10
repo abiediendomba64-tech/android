@@ -18,9 +18,9 @@ class ExampleInstrumentedTest {
     val composeRule = createAndroidComposeRule<MainActivity>()
 
     @Test
-    fun useAppContext() {
+    fun appContextUsesExpectedPackageName() {
         val appContext = InstrumentationRegistry.getInstrumentation().targetContext
-        assertEquals(BuildConfig.APPLICATION_ID, appContext.packageName)
+        assertEquals("com.aistudio.sistemkas.trkxvd", appContext.packageName)
     }
 
     @Test
