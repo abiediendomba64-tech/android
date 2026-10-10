@@ -1632,6 +1632,8 @@ class KasRepository(
         val duplicateReceivableIds = receivables.groupBy { it.id }.filterValues { it.size > 1 }.keys
         duplicateReceivableIds.forEach { issues += "ID tagihan duplikat: $it." }
         receivables.forEach { item ->
+            if (item.id.isBlank()) issues += "Tagihan tanpa ID ditemukan."
+            if (item.customerName.isBlank()) issues += "Tagihan ${item.id}: nama pihak kosong."
             if (item.type !in setOf("PIUTANG", "HUTANG")) issues += "Tagihan ${item.id}: jenis tidak valid."
             if (!runCatching { requireIsoDate(item.date, "Tanggal tagihan") }.isSuccess) issues += "Tagihan ${item.id}: tanggal pencatatan tidak valid."
             if (!runCatching { requireIsoDate(item.dueDate, "Jatuh tempo") }.isSuccess) issues += "Tagihan ${item.id}: tanggal jatuh tempo tidak valid."
@@ -1679,6 +1681,8 @@ class KasRepository(
         val duplicateAttendanceKeys = attendances.groupBy { key(it.employeeId) + "|" + it.date }.filterValues { it.size > 1 }.keys
         duplicateAttendanceKeys.forEach { issues += "Absensi ganda untuk karyawan/tanggal: $it." }
         attendances.forEach { att ->
+            if (att.id.isBlank()) issues += "Absensi tanpa ID ditemukan."
+            if (att.employeeId.isBlank()) issues += "Absensi ${att.id}: ID karyawan kosong."
             if (att.employeeId !in employeeIds) issues += "Absensi ${att.id}: karyawan ${att.employeeId} tidak terdaftar."
             if (!runCatching { requireIsoDate(att.date, "Tanggal absensi") }.isSuccess) issues += "Absensi ${att.id}: tanggal tidak valid."
             if (att.status !in setOf("Hadir", "Izin", "Sakit", "Alpa", "Cuti")) issues += "Absensi ${att.id}: status tidak valid."
@@ -1727,6 +1731,7 @@ class KasRepository(
         val reconciliationKeys = bankReconciliations.map { key(it.accountName) + "|" + it.period }
         if (reconciliationKeys.distinct().size != reconciliationKeys.size) issues += "Rekonsiliasi duplikat untuk akun/periode."
         bankReconciliations.forEach { recon ->
+            if (recon.id.isBlank()) issues += "Rekonsiliasi tanpa ID ditemukan."
             val account = accounts.firstOrNull { key(it.name) == key(recon.accountName) }
             if (account == null) issues += "Rekonsiliasi ${recon.id}: akun ${recon.accountName} tidak terdaftar."
             if (!recon.period.matches(Regex("""\d{4}-\d{2}""")) || !runCatching { periodEndDate(recon.period) }.isSuccess) {
@@ -2303,6 +2308,15 @@ class KasRepository(
                 val existingPlanIds = existingPlans.map { it.id }.toSet()
                 val existingUnitIds = existingUnits.map { it.id }.toSet()
 
+                require(accounts.all { it.id.isNotBlank() }) { "Backup memiliki ID akun kosong." }
+                require(transactions.all { it.id.isNotBlank() }) { "Backup memiliki ID transaksi kosong." }
+                require(receivables.all { it.id.isNotBlank() }) { "Backup memiliki ID tagihan kosong." }
+                require(employees.all { it.id.isNotBlank() }) { "Backup memiliki ID karyawan kosong." }
+                require(attendances.all { it.id.isNotBlank() }) { "Backup memiliki ID absensi kosong." }
+                require(recons.all { it.id.isNotBlank() }) { "Backup memiliki ID rekonsiliasi kosong." }
+                require(projects.all { it.id.isNotBlank() }) { "Backup memiliki ID proyek kosong." }
+                require(projectPlans.all { it.id.isNotBlank() }) { "Backup memiliki ID rencana kalender kosong." }
+                require(housingUnits.all { it.id.isNotBlank() }) { "Backup memiliki ID unit perumahan kosong." }
                 require(accounts.map { it.id }.distinct().size == accounts.size) { "Backup memiliki ID akun duplikat." }
                 require(accounts.none { it.id in existingAccountIds }) { "Backup memiliki ID akun yang sudah ada di database." }
                 require(transactions.map { it.id }.distinct().size == transactions.size) { "Backup memiliki ID transaksi duplikat." }

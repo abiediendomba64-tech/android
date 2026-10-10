@@ -2349,6 +2349,29 @@ class ExampleRobolectricTest {
     }
 
     @Test
+    fun restoreRejectsBlankMasterIdsBeforeAnyDatabaseWrite() = runBlocking {
+        val backup = """
+            {
+              "accounts": [{
+                "id": "",
+                "name": "Kas Tanpa ID",
+                "type": "Kas",
+                "initialBalance": 0,
+                "colorHex": "#1E56A0",
+                "isActive": true
+              }],
+              "transactions": []
+            }
+        """.trimIndent()
+
+        val result = repository.restoreDataFromJson(backup)
+        assertFalse(result.isSuccess)
+        assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("ID akun kosong"))
+        assertTrue(db.accountDao().getAllAccounts().first().isEmpty())
+        assertNull(db.accountDao().getAccountByName("Kas Tanpa ID"))
+    }
+
+    @Test
     fun integrityAuditDetectsReceivableStatusNotMatchingPaymentAmount() = runBlocking {
         db.accountDao().insertAccount(AccountEntity("acc-receivable-status", "Kas Status Tagihan", "Kas", 0.0))
         db.receivableDao().insertReceivable(
