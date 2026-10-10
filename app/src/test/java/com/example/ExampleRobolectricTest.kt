@@ -1897,4 +1897,66 @@ class ExampleRobolectricTest {
         assertEquals(150000.0, result.netCashChange, 0.01)
     }
 
+
+    @Test
+    fun bulkAttendanceSkipsInactiveEmployees() = runBlocking {
+        val active = EmployeeEntity(
+            id = "EMP-BULK-ACTIVE",
+            name = "Karyawan Aktif",
+            position = "Staf",
+            department = "PT",
+            phone = "",
+            dailyRate = 100000.0,
+            monthlySalary = 0.0,
+            isActive = true
+        )
+        val inactive = EmployeeEntity(
+            id = "EMP-BULK-INACTIVE",
+            name = "Karyawan Nonaktif",
+            position = "Staf",
+            department = "PT",
+            phone = "",
+            dailyRate = 100000.0,
+            monthlySalary = 0.0,
+            isActive = false
+        )
+        db.employeeDao().insertEmployee(active)
+        db.employeeDao().insertEmployee(inactive)
+
+        repository.bulkMarkAllEmployeesHadir("2026-10-11")
+
+        val attendance = db.attendanceDao().getAllAttendances().first()
+        assertEquals(setOf(active.id), attendance.map { it.employeeId }.toSet())
+    }
+
+    @Test
+    fun employeeWithoutAttendanceIsDeactivatedNotDeletedAfterPotentialMonthlyPayroll() = runBlocking {
+        db.accountDao().insertAccount(AccountEntity("acc-payroll-employee-history", "Kas Gaji Historis", "Kas", 1000000.0))
+        val employee = EmployeeEntity(
+            id = "EMP-PAYROLL-HISTORY-NO-ATT",
+            name = "Karyawan Gaji Bulanan",
+            position = "Staf",
+            department = "PT",
+            phone = "",
+            dailyRate = 0.0,
+            monthlySalary = 100000.0,
+            isActive = true
+        )
+        repository.saveEmployee(employee)
+        repository.savePayrollDisbursement(
+            period = "2026-10",
+            totalAmount = 100000.0,
+            accountName = "Kas Gaji Historis",
+            allocationsByProject = mapOf("" to 100000.0)
+        )
+
+        val deletedPhysically = repository.deleteEmployee(employee.id)
+        val retained = db.employeeDao().getEmployeeById(employee.id)
+
+        assertFalse(deletedPhysically)
+        assertNotNull(retained)
+        assertFalse(retained!!.isActive)
+        assertEquals(1, db.transactionDao().getAllActiveTransactions().first().size)
+    }
+
 }

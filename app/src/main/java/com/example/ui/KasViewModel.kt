@@ -893,7 +893,7 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
             val physicallyDeleted = repository.deleteEmployee(id)
             _snackBarMessage.emit(
                 if (physicallyDeleted) "Data karyawan berhasil dihapus."
-                else "Karyawan dinonaktifkan karena masih memiliki histori absensi."
+                else "Karyawan dinonaktifkan; riwayat absensi dan payroll tetap dipertahankan."
             )
         }
     }

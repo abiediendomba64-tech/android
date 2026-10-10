@@ -321,7 +321,8 @@ class KasRepository(
             require(paidPayroll == null) {
                 "Absensi tanggal $date tidak dapat ditambahkan karena payroll ${paidPayroll?.receiptNo?.removePrefix("PAYROLL-")} sudah dicairkan."
             }
-            val allEmployees = employeeDao.getAllEmployeesList()
+            val allEmployees = employeeDao.getAllEmployeesList().filter { it.isActive }
+            require(allEmployees.isNotEmpty()) { "Tidak ada karyawan aktif untuk dicatat absensinya." }
             allEmployees.forEach { emp ->
                 if (attendanceDao.getAttendanceByEmployeeAndDate(emp.id, date) == null) {
                     attendanceDao.insertAttendance(
@@ -709,31 +710,22 @@ class KasRepository(
         return database.withTransaction {
             val employee = employeeDao.getEmployeeById(id)
                 ?: throw IllegalArgumentException("Karyawan " + id + " tidak ditemukan.")
+            if (!employee.isActive) return@withTransaction false
+
+            // There is no employee-level payroll snapshot table yet; monthly salary may have
+            // been included in a paid payroll without an attendance row. Never hard-delete it.
             val references = attendanceDao.countReferencesToEmployee(id)
             val nowStamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-            if (references > 0) {
-                employeeDao.updateEmployee(employee.copy(isActive = false))
-                auditDao.insertAuditLog(AuditLogEntity(
-                    dateFormatted = nowStamp,
-                    action = "DEACTIVATE_EMPLOYEE",
-                    recordId = employee.id,
-                    details = "Karyawan " + employee.name + " dinonaktifkan karena memiliki " + references + " catatan absensi.",
-                    user = "Admin",
-                    verifiedFormulaStatus = "RECORDED"
-                ))
-                false
-            } else {
-                employeeDao.deleteEmployee(id)
-                auditDao.insertAuditLog(AuditLogEntity(
-                    dateFormatted = nowStamp,
-                    action = "DELETE_EMPLOYEE",
-                    recordId = employee.id,
-                    details = "Karyawan " + employee.name + " dihapus karena tidak memiliki catatan absensi.",
-                    user = "Admin",
-                    verifiedFormulaStatus = "RECORDED"
-                ))
-                true
-            }
+            employeeDao.updateEmployee(employee.copy(isActive = false))
+            auditDao.insertAuditLog(AuditLogEntity(
+                dateFormatted = nowStamp,
+                action = "DEACTIVATE_EMPLOYEE",
+                recordId = employee.id,
+                details = "Karyawan " + employee.name + " dinonaktifkan untuk mempertahankan histori payroll; referensi absensi: " + references + ".",
+                user = "Admin",
+                verifiedFormulaStatus = "RECORDED"
+            ))
+            false
         }
     }
 
