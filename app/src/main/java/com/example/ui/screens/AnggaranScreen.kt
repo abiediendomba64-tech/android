@@ -77,7 +77,7 @@ fun AnggaranScreen(
 ) {
     val context = LocalContext.current
     val budgetRealizations by viewModel.budgetRealizations.collectAsStateWithLifecycle()
-    val activeTransactions by viewModel.activeTransactions.collectAsStateWithLifecycle()
+    val ledgerTransactions by viewModel.ledgerTransactions.collectAsStateWithLifecycle()
     val projects by viewModel.activeProjects.collectAsStateWithLifecycle()
     var showAddDialog by remember { mutableStateOf(false) }
 
@@ -254,7 +254,7 @@ fun AnggaranScreen(
             } else {
                 items(budgetRealizations) { item ->
                     val isExpanded = expandedCategoryId == item.budget.id
-                    val categoryExpenses = activeTransactions.filter {
+                    val categoryExpenses = ledgerTransactions.filter {
                         it.type == "KELUAR" && it.status == "Selesai" &&
                                 (it.date.startsWith(item.budget.period) || item.budget.period.equals("All", ignoreCase = true)) &&
                                 it.allocation.equals(item.budget.category, ignoreCase = true) &&

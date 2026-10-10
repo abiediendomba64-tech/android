@@ -335,13 +335,19 @@ fun AbsensiScreen(
                                     IsoDatePickerField(
                                         value = startDate,
                                         label = "Tanggal Mulai",
-                                        onDateSelected = { viewModel.attendanceStartDate.value = it },
+                                        onDateSelected = {
+                                            viewModel.attendanceStartDate.value = it
+                                            if (it > endDate) viewModel.attendanceEndDate.value = it
+                                        },
                                         modifier = Modifier.weight(1f)
                                     )
                                     IsoDatePickerField(
                                         value = endDate,
                                         label = "Tanggal Akhir",
-                                        onDateSelected = { viewModel.attendanceEndDate.value = it },
+                                        onDateSelected = {
+                                            viewModel.attendanceEndDate.value = it
+                                            if (it < startDate) viewModel.attendanceStartDate.value = it
+                                        },
                                         modifier = Modifier.weight(1f)
                                     )
                                 }

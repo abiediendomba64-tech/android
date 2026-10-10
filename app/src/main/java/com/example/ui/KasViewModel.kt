@@ -828,6 +828,11 @@ class KasViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun hitungTotalLaporan(
+        transactions: List<TransactionEntity>,
+        selectedAccount: String
+    ): Pair<Double, Double> = repository.calculateReportAccountTotals(transactions, selectedAccount)
+
     fun hitungArusKas(startDate: String, endDate: String): CashFlowStatement {
         return repository.calculateCashFlowStatement(
             transactions = ledgerTransactions.value,

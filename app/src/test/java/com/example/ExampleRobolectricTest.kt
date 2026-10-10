@@ -1781,4 +1781,120 @@ class ExampleRobolectricTest {
         assertEquals("Selisih", rows.single().status)
     }
 
+
+    @Test
+    fun accountReportTotalsCountTransferDirectionsButConsolidatedTotalsDoNot() {
+        val rows = listOf(
+            TransactionEntity(
+                id = "TX-REPORT-IN-A",
+                type = "MASUK",
+                date = "2026-10-10",
+                time = "09:00:00",
+                account = "Bank A",
+                name = "Penerimaan A",
+                category = "Penjualan",
+                description = "",
+                amount = 10000.0,
+                status = "Selesai"
+            ),
+            TransactionEntity(
+                id = "TX-REPORT-OUT-A",
+                type = "KELUAR",
+                date = "2026-10-10",
+                time = "09:01:00",
+                account = "Bank A",
+                name = "Biaya A",
+                category = "Operasional",
+                description = "",
+                amount = 5000.0,
+                status = "Selesai"
+            ),
+            TransactionEntity(
+                id = "TX-REPORT-TRANSFER",
+                type = "TRANSFER",
+                date = "2026-10-10",
+                time = "09:02:00",
+                account = "Bank A",
+                toAccount = "Bank B",
+                name = "Transfer internal",
+                category = "Transfer",
+                description = "",
+                amount = 40000.0,
+                status = "Selesai"
+            ),
+            TransactionEntity(
+                id = "TX-REPORT-IN-B",
+                type = "MASUK",
+                date = "2026-10-10",
+                time = "09:03:00",
+                account = "Bank B",
+                name = "Penerimaan B",
+                category = "Penjualan",
+                description = "",
+                amount = 20000.0,
+                status = "Selesai"
+            ),
+            TransactionEntity(
+                id = "TX-REPORT-OUT-B",
+                type = "KELUAR",
+                date = "2026-10-10",
+                time = "09:04:00",
+                account = "Bank B",
+                name = "Biaya B",
+                category = "Operasional",
+                description = "",
+                amount = 3000.0,
+                status = "Selesai"
+            )
+        )
+        val bankA = repository.calculateReportAccountTotals(rows, "bank a")
+        assertEquals(10000.0, bankA.first, 0.01)
+        assertEquals(45000.0, bankA.second, 0.01)
+        val bankB = repository.calculateReportAccountTotals(rows, "Bank B")
+        assertEquals(60000.0, bankB.first, 0.01)
+        assertEquals(3000.0, bankB.second, 0.01)
+        val consolidated = repository.calculateReportAccountTotals(rows, "Semua")
+        assertEquals(30000.0, consolidated.first, 0.01)
+        assertEquals(8000.0, consolidated.second, 0.01)
+    }
+
+    @Test
+    fun cashFlowClassifiesCapitalCategoriesCaseInsensitively() {
+        val transactions = listOf(
+            TransactionEntity(
+                id = "TX-CASHFLOW-CAPITAL",
+                type = "MASUK",
+                date = "2026-10-10",
+                time = "10:00:00",
+                account = "Kas",
+                name = "Setoran modal",
+                category = "mOdAl",
+                description = "",
+                amount = 100000.0,
+                status = "Selesai"
+            ),
+            TransactionEntity(
+                id = "TX-CASHFLOW-SALES",
+                type = "MASUK",
+                date = "2026-10-10",
+                time = "10:01:00",
+                account = "Kas",
+                name = "Penjualan",
+                category = "Penjualan",
+                description = "",
+                amount = 50000.0,
+                status = "Selesai"
+            )
+        )
+        val result = repository.calculateCashFlowStatement(
+            transactions = transactions,
+            accounts = emptyList(),
+            startDate = "2026-10-01",
+            endDate = "2026-10-31"
+        )
+        assertEquals(50000.0, result.operatingInflow, 0.01)
+        assertEquals(100000.0, result.financingInflow, 0.01)
+        assertEquals(150000.0, result.netCashChange, 0.01)
+    }
+
 }

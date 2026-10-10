@@ -106,8 +106,9 @@ fun LaporanScreen(
         inDateRange && matchAccount && matchCategory && matchFundBucket && matchProject && matchStatus
     }
 
-    val totalMasuk = reportTransactions.filter { it.type == "MASUK" }.sumOf { it.amount }
-    val totalKeluar = reportTransactions.filter { it.type == "KELUAR" }.sumOf { it.amount }
+    val reportTotals = viewModel.hitungTotalLaporan(reportTransactions, selectedAccount)
+    val totalMasuk = reportTotals.first
+    val totalKeluar = reportTotals.second
     val netLaporan = totalMasuk - totalKeluar
 
     LazyColumn(

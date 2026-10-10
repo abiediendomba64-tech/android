@@ -1097,6 +1097,32 @@ class KasRepository(
         }
     }
 
+    fun calculateReportAccountTotals(
+        transactions: List<TransactionEntity>,
+        selectedAccount: String
+    ): Pair<Double, Double> {
+        val consolidated = selectedAccount.equals("Semua", ignoreCase = true)
+        val totalIn = transactions.sumOf { tx ->
+            when {
+                tx.type == "MASUK" &&
+                    (consolidated || tx.account.equals(selectedAccount, ignoreCase = true)) -> tx.amount
+                !consolidated && tx.type == "TRANSFER" &&
+                    tx.toAccount?.equals(selectedAccount, ignoreCase = true) == true -> tx.amount
+                else -> 0.0
+            }
+        }
+        val totalOut = transactions.sumOf { tx ->
+            when {
+                tx.type == "KELUAR" &&
+                    (consolidated || tx.account.equals(selectedAccount, ignoreCase = true)) -> tx.amount
+                !consolidated && tx.type == "TRANSFER" &&
+                    tx.account.equals(selectedAccount, ignoreCase = true) -> tx.amount
+                else -> 0.0
+            }
+        }
+        return totalIn to totalOut
+    }
+
     fun calculateCashFlowStatement(
         transactions: List<TransactionEntity>,
         accounts: List<AccountEntity>,
@@ -1106,8 +1132,12 @@ class KasRepository(
         val settledTx = transactions.filter { it.status == "Selesai" }
         val periodTx = settledTx.filter { it.date >= startDate && it.date <= endDate }
 
+        fun isCapitalCategory(category: String): Boolean =
+            category.trim().equals("Modal", ignoreCase = true) ||
+                category.trim().equals("Investasi", ignoreCase = true)
+
         val opInflow = periodTx.filter {
-            it.type == "MASUK" && it.category !in listOf("Modal", "Investasi")
+            it.type == "MASUK" && !isCapitalCategory(it.category)
         }.sumOf { it.amount }
 
         // Project attribution is separate from cash-flow classification: project wages
@@ -1120,7 +1150,7 @@ class KasRepository(
         val opOutflow = periodTx.filter { it.type == "KELUAR" && it.id !in investingIds }.sumOf { it.amount }
 
         val finInflow = periodTx.filter {
-            it.type == "MASUK" && it.category in listOf("Modal", "Investasi")
+            it.type == "MASUK" && isCapitalCategory(it.category)
         }.sumOf { it.amount }
 
         val netOp = opInflow - opOutflow
