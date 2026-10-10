@@ -1038,7 +1038,7 @@ class KasRepository(
         val totalInByAccount = mutableMapOf<String, Double>()
         val totalOutByAccount = mutableMapOf<String, Double>()
 
-        fun key(name: String): String = name.trim().lowercase(Locale.getDefault())
+        fun key(name: String): String = name.trim().lowercase(Locale.ROOT)
         settledTx.forEach { tx ->
             when (tx.type) {
                 "MASUK" -> {
@@ -1058,10 +1058,24 @@ class KasRepository(
             }
         }
 
+        // Ledger rows currently store account names, not foreign keys. If legacy data
+        // contains duplicate normalized names, applying the same movements to every matching
+        // account double-counts the consolidated dashboard balance. Attribute those ambiguous
+        // movements once, deterministically (active account first, then stable ID), and let the
+        // integrity audit flag the ambiguous account master for manual cleanup.
+        val movementOwnerByName = accounts
+            .filter { it.name.isNotBlank() }
+            .groupBy { key(it.name) }
+            .mapValues { (_, group) ->
+                group.sortedWith(compareByDescending<AccountEntity> { it.isActive }.thenBy { it.id })
+                    .first().id
+            }
+
         return accounts.map { account ->
             val k = key(account.name)
-            val totalMasuk = totalInByAccount[k] ?: 0.0
-            val totalKeluar = totalOutByAccount[k] ?: 0.0
+            val ownsMovement = movementOwnerByName[k] == account.id
+            val totalMasuk = if (ownsMovement) totalInByAccount[k] ?: 0.0 else 0.0
+            val totalKeluar = if (ownsMovement) totalOutByAccount[k] ?: 0.0 else 0.0
             AccountWithBalance(
                 account = account,
                 totalMasuk = totalMasuk,

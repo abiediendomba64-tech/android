@@ -2037,4 +2037,33 @@ class ExampleRobolectricTest {
         assertTrue(db.transactionDao().getAllActiveTransactions().first().isEmpty())
     }
 
+
+    @Test
+    fun legacyDuplicateAccountNamesDoNotDoubleCountMovementInConsolidatedBalance() {
+        val duplicateAccounts = listOf(
+            AccountEntity("acc-b-duplicate", "Bank Sama", "Bank", 0.0, isActive = true),
+            AccountEntity("acc-a-duplicate", " bank sama ", "Kas", 100000.0, isActive = true)
+        )
+        val rows = listOf(
+            TransactionEntity(
+                id = "TX-DUPLICATE-ACCOUNT-MOVEMENT",
+                type = "MASUK",
+                date = "2026-10-11",
+                time = "10:00:00",
+                account = "BANK SAMA",
+                name = "Mutasi lama",
+                category = "Penjualan",
+                description = "",
+                amount = 50000.0,
+                status = "Selesai"
+            )
+        )
+        val balances = repository.calculateAccountBalances(duplicateAccounts, rows)
+        assertEquals(150000.0, balances.sumOf { it.currentBalance }, 0.01)
+        assertEquals(50000.0, balances.sumOf { it.totalMasuk }, 0.01)
+        // The active account with the stable lowest ID gets the ambiguous movement until audit cleanup.
+        assertEquals(50000.0, balances.single { it.account.id == "acc-a-duplicate" }.totalMasuk, 0.01)
+        assertEquals(0.0, balances.single { it.account.id == "acc-b-duplicate" }.totalMasuk, 0.01)
+    }
+
 }
