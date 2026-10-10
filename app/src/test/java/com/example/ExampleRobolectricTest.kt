@@ -465,6 +465,18 @@ class ExampleRobolectricTest {
     }
 
     @Test
+    fun restoreRejectsEmptyJsonWithoutTouchingExistingData() = runBlocking {
+        db.accountDao().insertAccount(AccountEntity("existing-json-account", "Kas Tetap", "Kas", 100000.0))
+
+        val result = repository.restoreDataFromJson("{}")
+
+        assertFalse(result.isSuccess)
+        assertNotNull(db.accountDao().getAccountById("existing-json-account"))
+        assertEquals(100000.0, db.accountDao().getAccountById("existing-json-account")?.initialBalance ?: 0.0, 0.01)
+        assertTrue(db.transactionDao().getAllActiveTransactions().first().isEmpty())
+    }
+
+    @Test
     fun spreadsheetImportRejectsMalformedMoneyAndTrailingTimestampTextAtomically() = runBlocking {
         db.accountDao().insertAccount(AccountEntity("csv-strict-account", "Kas CSV Strict", "Kas", 0.0))
         val headers = listOf(
@@ -489,6 +501,7 @@ class ExampleRobolectricTest {
         }
         val csv = "\uFEFF" + headers.joinToString(",") + "\n" +
             csvRow("TX-BAD-AMOUNT", "12,34,56", "2026-10-07 10:00:00.000") + "\n" +
+            csvRow("TX-BAD-SIGN", "+-1000", "2026-10-07 10:00:00.000") + "\n" +
             csvRow("TX-BAD-TIMESTAMP", "1000", "2026-10-07 10:00:00.000junk")
 
         val result = repository.importTransactionsFromCsv(csv)
